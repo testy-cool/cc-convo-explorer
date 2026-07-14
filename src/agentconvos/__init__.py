@@ -5,7 +5,8 @@ Library API — import these directly:
     from agentconvos import scan_projects, parse_jsonl, get_meta, search
 
 Discovers sessions from Claude Code (~/.claude/projects/),
-Codex (~/.codex/sessions/), and Pi (~/.pi/agent/sessions/).
+Codex (~/.codex/sessions/), Pi (~/.pi/agent/sessions/),
+and Agy (~/.gemini/antigravity-cli/conversations/).
 """
 
 from .parser import (

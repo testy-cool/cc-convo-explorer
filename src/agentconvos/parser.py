@@ -1,10 +1,11 @@
-"""Parse Claude Code, Codex, and Pi .jsonl conversation logs into structured data."""
+"""Parse Claude Code, Codex, Pi, and Agy conversation logs into structured data."""
 
 from __future__ import annotations
 
 import json
 import os
 import re
+import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -53,13 +54,16 @@ class ConversationMeta:
     cwd: str
     preview: str  # first user message, truncated
     turn_count: int = 0
-    source: str = "claude"  # "claude", "codex", or "pi"
+    source: str = "claude"  # "claude", "codex", "pi", or "agy"
     git_branch: str = ""
 
 
 def _detect_format(path: Path) -> str:
-    """Detect whether a .jsonl file is Claude Code, Codex, or Pi format."""
+    """Detect whether a conversation file is Claude Code, Codex, Pi, or Agy format."""
     try:
+        if path.suffix == ".db" and _is_agy_db(path):
+            return "agy"
+
         if path.suffix == ".json":
             with open(path, "r", encoding="utf-8") as f:
                 rec = json.load(f)
@@ -78,9 +82,23 @@ def _detect_format(path: Path) -> str:
                 and "payload" in rec
             ):
                 return "codex"
-    except (json.JSONDecodeError, OSError, KeyError):
+    except (UnicodeDecodeError, json.JSONDecodeError, OSError, KeyError):
         pass
     return "claude"
+
+
+def _is_agy_db(path: Path) -> bool:
+    """Return true for Antigravity CLI trajectory SQLite databases."""
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return False
+    tables = {row[0] for row in rows}
+    return {"steps", "trajectory_meta"}.issubset(tables)
 
 
 def get_meta(path: Path) -> ConversationMeta | None:
@@ -92,6 +110,8 @@ def get_meta(path: Path) -> ConversationMeta | None:
         return _get_meta_codex_json(path)
     if fmt == "pi":
         return _get_meta_pi(path)
+    if fmt == "agy":
+        return _get_meta_agy(path)
     return _get_meta_claude(path)
 
 
@@ -364,6 +384,67 @@ def _get_meta_pi(path: Path) -> ConversationMeta | None:
     return None
 
 
+def _agy_home() -> Path:
+    home = os.environ.get("AGY_HOME") or os.environ.get("ANTIGRAVITY_CLI_HOME")
+    if home:
+        return Path(home).expanduser()
+    user_home = Path(os.environ.get("USERPROFILE", Path.home()))
+    return user_home / ".gemini" / "antigravity-cli"
+
+
+def _agy_history_records(conversation_id: str | None = None) -> list[dict]:
+    history_path = _agy_home() / "history.jsonl"
+    records: list[dict] = []
+    try:
+        with open(history_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if conversation_id and rec.get("conversationId") != conversation_id:
+                    continue
+                records.append(rec)
+    except OSError:
+        pass
+    records.sort(key=lambda r: r.get("timestamp", 0))
+    return records
+
+
+def _ms_to_iso(value) -> str:
+    if not isinstance(value, (int, float)):
+        return ""
+    return datetime.fromtimestamp(value / 1000, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _get_meta_agy(path: Path) -> ConversationMeta | None:
+    """Extract metadata from an Agy/Antigravity CLI trajectory database."""
+    conversation_id = path.stem
+    records = _agy_history_records(conversation_id)
+    first = records[0] if records else {}
+    timestamp = _ms_to_iso(first.get("timestamp"))
+    if not timestamp:
+        try:
+            timestamp = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+        except OSError:
+            timestamp = ""
+
+    preview = str(first.get("display", "")).strip().replace("\n", " ")[:120]
+    cwd = str(first.get("workspace", "")).strip()
+    return ConversationMeta(
+        path=path,
+        uuid=conversation_id,
+        slug="",
+        timestamp=timestamp,
+        cwd=cwd,
+        preview=preview,
+        source="agy",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Detail levels for parse_jsonl
 # ---------------------------------------------------------------------------
@@ -437,6 +518,8 @@ def parse_jsonl(path: Path, detail: str = DETAIL_TEXT, last_n: int = 0) -> list[
         turns = _parse_jsonl_codex_json(path, detail)
     elif fmt == "pi":
         turns = _parse_jsonl_pi(path, detail)
+    elif fmt == "agy":
+        turns = _parse_db_agy(path, detail)
     else:
         turns = _parse_jsonl_claude(path, detail)
     if last_n > 0:
@@ -856,6 +939,159 @@ def _parse_jsonl_pi(path: Path, detail: str = DETAIL_TEXT) -> list[Turn]:
     return turns
 
 
+def _printable_chunks(blob: bytes | None, min_len: int = 8) -> list[str]:
+    if not blob:
+        return []
+    text = blob.decode("utf-8", errors="ignore")
+    pattern = rf"[\x09\x0a\x0d\x20-\x7e]{{{min_len},}}"
+    return re.findall(pattern, text)
+
+
+def _clean_agy_text(text: str) -> str:
+    text = text.split("2(bot-", 1)[0]
+    text = text.split("\x00", 1)[0]
+    text = re.sub(r"^[^A-Za-z0-9#`*_-]+", "", text)
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _looks_like_agy_assistant_text(text: str) -> bool:
+    if len(text) < 20 or len(text) > 6000:
+        return False
+    if " " not in text:
+        return False
+    if any(marker in text for marker in (
+        "sessionID",
+        "toolAction",
+        "toolSummary",
+        "thinkingSignature",
+        "file:///",
+        '"CommandLine"',
+        '"AbsolutePath"',
+        '"DirectoryPath"',
+    )):
+        return False
+    if re.fullmatch(r"[A-Za-z0-9_-]{12,}", text):
+        return False
+    if len(re.findall(r"[A-Za-z]{3,}", text)) < 4:
+        return False
+    if text.startswith(("{", "[", "b$", "B!", "N\n$", "P\n$")):
+        return False
+    return True
+
+
+def _extract_json_objects(text: str) -> list[dict]:
+    decoder = json.JSONDecoder()
+    objects: list[dict] = []
+    start = 0
+    while True:
+        idx = text.find("{", start)
+        if idx == -1:
+            break
+        try:
+            obj, end = decoder.raw_decode(text[idx:])
+        except json.JSONDecodeError:
+            start = idx + 1
+            continue
+        if isinstance(obj, dict):
+            objects.append(obj)
+        start = idx + max(end, 1)
+    return objects
+
+
+def _summarize_agy_tool(name: str, arguments: dict) -> str:
+    if "CommandLine" in arguments:
+        cmd = str(arguments.get("CommandLine", ""))
+        return f"`{cmd[:120]}`" if cmd else "(empty)"
+    if "AbsolutePath" in arguments:
+        path = str(arguments.get("AbsolutePath", ""))
+        start = arguments.get("StartLine")
+        end = arguments.get("EndLine")
+        if start and end:
+            return f"{path}:{start}-{end}"
+        return path or "?"
+    if "DirectoryPath" in arguments:
+        return str(arguments.get("DirectoryPath", "?"))
+    if "TargetFile" in arguments:
+        return str(arguments.get("TargetFile", "?"))
+    if "SearchPath" in arguments and "Query" in arguments:
+        query = str(arguments.get("Query", "?"))
+        path = str(arguments.get("SearchPath", ""))
+        return f'"{query}"' + (f" in {path}" if path else "")
+    return str(arguments.get("toolSummary") or arguments.get("toolAction") or "?")
+
+
+def _parse_db_agy(path: Path, detail: str = DETAIL_TEXT) -> list[Turn]:
+    """Parse Agy/Antigravity CLI SQLite trajectory databases."""
+    include_tools = detail in (DETAIL_TOOLS, DETAIL_RESULTS, DETAIL_FULL)
+    conversation_id = path.stem
+    turns: list[Turn] = []
+
+    seen_users: set[str] = set()
+    for rec in _agy_history_records(conversation_id):
+        text = str(rec.get("display", "")).strip()
+        if not text or len(text) < 1:
+            continue
+        key = f"{rec.get('timestamp', '')}:{text}"
+        if key in seen_users:
+            continue
+        seen_users.add(key)
+        turns.append(Turn(role="user", text=text))
+
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            rows = conn.execute(
+                "SELECT idx, step_type, metadata, step_payload FROM steps ORDER BY idx"
+            ).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return turns
+
+    seen_assistant: set[str] = set()
+    seen_tools: set[str] = set()
+    for _idx, step_type, metadata, payload in rows:
+        chunks = _printable_chunks(metadata, min_len=20) + _printable_chunks(payload, min_len=20)
+
+        if step_type == 15:
+            for chunk in chunks:
+                text = _clean_agy_text(chunk)
+                if not _looks_like_agy_assistant_text(text):
+                    continue
+                key = re.sub(r"\s+", " ", text)[:300]
+                if key in seen_assistant:
+                    continue
+                seen_assistant.add(key)
+                turns.append(Turn(role="assistant", text=text))
+
+        if include_tools:
+            for chunk in chunks:
+                for obj in _extract_json_objects(chunk):
+                    if not any(k in obj for k in ("toolAction", "toolSummary", "CommandLine", "AbsolutePath", "DirectoryPath")):
+                        continue
+                    name = ""
+                    for candidate in chunks:
+                        candidate = candidate.strip().strip("\t")
+                        if candidate in ("run_command", "view_file", "list_dir", "replace_file_content", "search_file_content", "ask_question"):
+                            name = candidate
+                            break
+                    if not name:
+                        name = str(obj.get("toolAction") or obj.get("toolSummary") or "tool")
+                    summary = _summarize_agy_tool(name, obj)
+                    tool_line = f"> **{name}**: {summary}"
+                    if tool_line in seen_tools:
+                        continue
+                    seen_tools.add(tool_line)
+                    if turns and turns[-1].role == "assistant":
+                        turns[-1] = Turn(role="assistant", text=turns[-1].text + "\n\n" + tool_line)
+                    else:
+                        turns.append(Turn(role="assistant", text=tool_line))
+
+    return turns
+
+
 @dataclass
 class SearchHit:
     meta: ConversationMeta
@@ -907,6 +1143,8 @@ def get_stats(path: Path) -> ConversationStats:
         return _get_stats_codex_json(path)
     if fmt == "pi":
         return _get_stats_pi(path)
+    if fmt == "agy":
+        return _get_stats_agy(path)
     return _get_stats_claude(path)
 
 
@@ -1041,6 +1279,31 @@ def _get_stats_pi(path: Path) -> ConversationStats:
                         for block in content:
                             if isinstance(block, dict) and block.get("type") == "toolCall":
                                 stats.tool_calls += 1
+
+    return stats
+
+
+def _get_stats_agy(path: Path) -> ConversationStats:
+    """Extract basic stats from an Agy/Antigravity CLI trajectory database."""
+    stats = ConversationStats()
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            rows = conn.execute("SELECT step_type, metadata, step_payload FROM steps").fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return stats
+
+    for step_type, metadata, payload in rows:
+        blob = (metadata or b"") + (payload or b"")
+        text = blob.decode("utf-8", errors="ignore")
+        if not stats.model:
+            match = re.search(r"gemini-[A-Za-z0-9_.-]+", text)
+            if match:
+                stats.model = match.group(0)
+        if step_type not in (14, 15, 23, 98):
+            stats.tool_calls += 1
 
     return stats
 

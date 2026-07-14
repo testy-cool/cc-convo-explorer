@@ -1,4 +1,4 @@
-"""Textual TUI for browsing Claude Code, Codex, and Pi conversations."""
+"""Textual TUI for browsing Claude Code, Codex, Pi, and Agy conversations."""
 
 from __future__ import annotations
 
@@ -34,8 +34,9 @@ _SOURCE_STYLE = {
     "claude": ("Claude Code", "bold #cc5500"),
     "codex": ("Codex", "bold #00cc66"),
     "pi": ("Pi", "bold #7c6fff"),
+    "agy": ("Agy", "bold #00a3ff"),
 }
-_SOURCE_ORDER = ["claude", "codex", "pi"]
+_SOURCE_ORDER = ["claude", "codex", "pi", "agy"]
 
 
 def _group_key(display_path: str, source: str) -> tuple[str, str]:
@@ -75,7 +76,7 @@ def _project_real_path(project: Project, convos: list[ConversationMeta] | None =
             if convo.cwd:
                 return convo.cwd
     display_path = project.display_path
-    for prefix in ("[codex] ", "[pi] "):
+    for prefix in ("[codex] ", "[pi] ", "[agy] "):
         if display_path.startswith(prefix):
             return display_path[len(prefix):]
     return display_path
@@ -987,7 +988,7 @@ class ConvoExplorer(App):
         if not self.current_meta:
             self.notify("Select a conversation first", severity="warning")
             return
-        if self.current_meta.source == "pi":
+        if self.current_meta.source not in ("claude", "codex", "agy"):
             self.notify(f"Resume not supported for {self.current_meta.source.title()} conversations", severity="warning")
             return
         self._resume_meta = self.current_meta
@@ -1106,15 +1107,15 @@ def _handoff_cmd(
         return ["codex"] + codex_args + extra + [message]
     if source == "pi":
         return ["pi"] + extra + [message]
+    if source == "agy":
+        return ["agy", "--dangerously-skip-permissions"] + extra + ["--prompt-interactive", message]
     return ["claude", "--dangerously-skip-permissions"] + extra + [message]
 
 
-def _handoff_agent(conversation_source: str, requested_agent: str | None, codex_yolo: bool) -> str:
+def _handoff_agent(conversation_source: str, requested_agent: str | None, _yolo: bool) -> str:
     """Return the CLI agent to start for handoff."""
     if requested_agent:
         return requested_agent
-    if codex_yolo:
-        return "codex"
     return conversation_source
 
 
@@ -1125,12 +1126,14 @@ def _resume_cmd(source: str, uuid: str, extra_args: list[str] | None = None) -> 
         return ["claude", "--dangerously-skip-permissions", "-r", uuid] + extra
     if source == "codex":
         return ["codex", "resume", "--dangerously-bypass-approvals-and-sandbox"] + extra + [uuid]
+    if source == "agy":
+        return ["agy", "--dangerously-skip-permissions"] + extra + ["--conversation", uuid]
     return None
 
 
 def main() -> None:
     import argparse
-    parser = argparse.ArgumentParser(description="Browse and analyze Claude Code, Codex, and Pi conversations")
+    parser = argparse.ArgumentParser(description="Browse and analyze Claude Code, Codex, Pi, and Agy conversations")
     parser.add_argument("--analyze", nargs="+", metavar="ID_OR_PATH", help="Analyze conversations (JSONL paths, UUIDs, or slugs)")
     parser.add_argument("--concat", nargs="+", metavar="ID_OR_PATH", help="Export concatenated markdown (JSONL paths, UUIDs, or slugs)")
     parser.add_argument("--model", choices=MODELS, default=DEFAULT_MODEL, help="Gemini model")
@@ -1144,19 +1147,21 @@ def main() -> None:
     parser.add_argument("--resume", nargs=1, metavar="ID_OR_PATH", help="Resume a conversation with its native CLI (add extra CLI flags after --)")
     parser.add_argument("--dry-run", action="store_true", help="Print the command instead of running it (use with --resume/--handoff)")
     parser.add_argument("--handoff", nargs="?", const="latest", default=None, metavar="MODE",
-                        help="Export CWD conversation and start new session. Modes: latest (default), select (pick from list), claude/codex/pi (latest from that source)")
-    parser.add_argument("--handoff-agent", choices=["claude", "codex", "pi"], metavar="AGENT",
+                        help="Export CWD conversation and start new session. Use --convo SOURCE --handoff AGENT to split source and target.")
+    parser.add_argument("--handoff-agent", choices=["claude", "codex", "pi", "agy"], metavar="AGENT",
                         help="Agent CLI to start for --handoff (defaults to selected conversation source)")
     parser.add_argument("--yolo", action="store_true",
-                        help="Use `codex --yolo` for Codex handoff commands (implies --handoff-agent codex if omitted)")
+                        help="Use the target agent's no-prompt permission mode for handoff commands")
     parser.add_argument("--export-all", metavar="DIR", help="Export every conversation as individual markdown files to DIR")
     parser.add_argument("--projects-dir", nargs="+", metavar="DIR", help="Additional projects directories to scan (e.g. copied from other machines)")
     parser.add_argument("--summarize", action="store_true",
                         help="Generate missing session summaries via Gemini (cron-friendly)")
     parser.add_argument("--json", action="store_true",
                         help="Output machine-readable JSON (use with --list, --search, --last, --context)")
-    parser.add_argument("--source", choices=["claude", "codex", "pi"],
+    parser.add_argument("--source", choices=["claude", "codex", "pi", "agy"],
                         help="Filter by agent source")
+    parser.add_argument("--convo", choices=["claude", "codex", "pi", "agy"],
+                        help="Conversation source to use, e.g. --convo agy --handoff codex --yolo")
     parser.add_argument("--after", metavar="DATE",
                         help="Only conversations after this date (YYYY-MM-DD)")
     parser.add_argument("--before", metavar="DATE",
@@ -1167,11 +1172,16 @@ def main() -> None:
                         help="Quick project digest: recent session summaries for cwd")
     args, remaining = parser.parse_known_args()
 
+    if args.source and args.convo and args.source != args.convo:
+        print(f"Error: --source {args.source} conflicts with --convo {args.convo}")
+        return
+
     # Parse extra project dirs
     _extra_dirs = [Path(d) for d in args.projects_dir] if args.projects_dir else None
+    source_arg = args.source or args.convo
     _scan_kwargs = dict(
         extra_dirs=_extra_dirs,
-        source=args.source,
+        source=source_arg,
         after=args.after,
         before=args.before,
     )
@@ -1314,7 +1324,13 @@ def main() -> None:
             for c in p.conversations:
                 if c.cwd and os.path.realpath(c.cwd) == cwd:
                     cwd_convos.append(c)
-        source_filter = args.handoff if args.handoff in ("claude", "codex", "pi") else None
+        source_filter = source_arg
+        target_agent_from_handoff = None
+        if args.handoff in ("claude", "codex", "pi", "agy"):
+            if source_arg:
+                target_agent_from_handoff = args.handoff
+            else:
+                source_filter = args.handoff
         if source_filter:
             cwd_convos = [c for c in cwd_convos if c.source == source_filter]
         if not cwd_convos:
@@ -1339,10 +1355,7 @@ def main() -> None:
         name = meta.slug or meta.uuid[:8]
         print(f"Exported: {name} → {out_path}")
         message = f"Read the file {out_path.resolve()} for context from our last session, then summarize what we were working on and ask how to continue."
-        target_agent = _handoff_agent(meta.source, args.handoff_agent, args.yolo)
-        if args.yolo and target_agent != "codex":
-            print("Error: --yolo only applies to Codex handoff commands")
-            return
+        target_agent = _handoff_agent(meta.source, args.handoff_agent or target_agent_from_handoff, args.yolo)
         cmd = _handoff_cmd(target_agent, message, remaining, codex_yolo=args.yolo)
         display = " ".join(cmd[:-1]) + f' "{message}"'
         print(f"  {display}")
@@ -1588,9 +1601,6 @@ def main() -> None:
         print(f"Exported: {name} → {out_path}")
         message = f"Read the file {out_path.resolve()} for context from our last session, then summarize what we were working on and ask how to continue."
         target_agent = _handoff_agent(meta.source, args.handoff_agent, args.yolo)
-        if args.yolo and target_agent != "codex":
-            print("Error: --yolo only applies to Codex handoff commands")
-            return
         cmd = _handoff_cmd(target_agent, message, remaining, codex_yolo=args.yolo)
         display = " ".join(cmd[:-1]) + f' "{message}"'
         print(f"  {display}")

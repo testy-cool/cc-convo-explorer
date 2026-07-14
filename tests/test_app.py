@@ -1,15 +1,79 @@
 import contextlib
 import io
+import json
 import os
+import sqlite3
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from agentconvos.app import _handoff_cmd, main
-from agentconvos.parser import ConversationMeta, ConversationStats
-from agentconvos.scanner import Project
+from agentconvos.app import _handoff_agent, _handoff_cmd, _resume_cmd, main
+from agentconvos.parser import ConversationMeta, ConversationStats, get_meta, parse_jsonl
+from agentconvos.scanner import Project, scan_projects
+
+
+def _write_agy_db(path: Path, assistant_text: str = "I can help with that.") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE trajectory_meta (
+                trajectory_id text,
+                cascade_id text,
+                trajectory_type integer,
+                source integer,
+                PRIMARY KEY (trajectory_id)
+            );
+            CREATE TABLE steps (
+                idx integer,
+                step_type integer NOT NULL DEFAULT 0,
+                status integer NOT NULL DEFAULT 0,
+                has_subtrajectory numeric NOT NULL DEFAULT false,
+                metadata blob,
+                error_details blob,
+                permissions blob,
+                task_details blob,
+                render_info blob,
+                step_payload blob,
+                step_format integer NOT NULL DEFAULT 0,
+                PRIMARY KEY (idx)
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO trajectory_meta VALUES (?, ?, ?, ?)",
+            (path.stem, "cascade", 0, 0),
+        )
+        conn.execute(
+            "INSERT INTO steps (idx, step_type, status, step_payload) VALUES (?, ?, ?, ?)",
+            (0, 15, 5, f"\n^{assistant_text}2(bot-test".encode("utf-8")),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _write_agy_history(home: Path, conversation_id: str, workspace: Path) -> None:
+    history = home / "history.jsonl"
+    history.parent.mkdir(parents=True, exist_ok=True)
+    records = [
+        {
+            "display": "start agy task",
+            "timestamp": 1780436328708,
+            "workspace": str(workspace),
+            "conversationId": conversation_id,
+        },
+        {
+            "display": "continue agy task",
+            "timestamp": 1780436578579,
+            "workspace": str(workspace),
+            "conversationId": conversation_id,
+        },
+    ]
+    history.write_text("\n".join(json.dumps(r) for r in records), encoding="utf-8")
 
 
 class HandoffCommandTests(unittest.TestCase):
@@ -18,6 +82,11 @@ class HandoffCommandTests(unittest.TestCase):
             _handoff_cmd("codex", "handoff message", codex_yolo=True),
             ["codex", "--yolo", "handoff message"],
         )
+
+    def test_yolo_does_not_force_codex_target(self):
+        self.assertEqual(_handoff_agent("agy", None, True), "agy")
+        self.assertEqual(_handoff_agent("claude", None, True), "claude")
+        self.assertEqual(_handoff_agent("agy", "codex", True), "codex")
 
     def test_handoff_agent_targets_codex_independent_of_conversation_source(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -64,6 +133,197 @@ class HandoffCommandTests(unittest.TestCase):
         self.assertIn("codex --yolo", output)
         self.assertNotIn("claude --dangerously-skip-permissions", output)
         self.assertNotIn("--dangerously-bypass-approvals-and-sandbox", output)
+
+    def test_agy_handoff_yolo_without_target_stays_agy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp)
+            convo_path = cwd / "agy.db"
+            _write_agy_db(convo_path)
+            meta = ConversationMeta(
+                path=convo_path,
+                uuid="agy123",
+                slug="",
+                timestamp="2026-06-03T12:00:00",
+                cwd=str(cwd),
+                preview="Previous Agy work",
+                source="agy",
+            )
+            project = Project("agy:tmp", f"[agy] {cwd}", [meta])
+
+            old_argv = sys.argv
+            old_cwd = os.getcwd()
+            sys.argv = ["agentconvos", "--handoff", "agy", "--yolo", "--dry-run"]
+            stream = io.StringIO()
+            try:
+                os.chdir(cwd)
+                with (
+                    patch("agentconvos.scanner.scan_projects", return_value=[project]),
+                    patch("agentconvos.app.parse_jsonl", return_value=[]),
+                    patch("agentconvos.app.get_stats", return_value=ConversationStats()),
+                    patch("agentconvos.app.to_markdown", return_value="exported"),
+                    contextlib.redirect_stdout(stream),
+                ):
+                    main()
+            finally:
+                sys.argv = old_argv
+                os.chdir(old_cwd)
+
+        output = stream.getvalue()
+        self.assertIn("agy --dangerously-skip-permissions", output)
+        self.assertNotIn("codex --yolo", output)
+        self.assertNotIn("--dangerously-bypass-approvals-and-sandbox", output)
+
+    def test_convo_source_can_handoff_to_codex_yolo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp)
+            convo_path = cwd / "agy.db"
+            _write_agy_db(convo_path)
+            meta = ConversationMeta(
+                path=convo_path,
+                uuid="agy123",
+                slug="",
+                timestamp="2026-06-03T12:00:00",
+                cwd=str(cwd),
+                preview="Previous Agy work",
+                source="agy",
+            )
+            project = Project("agy:tmp", f"[agy] {cwd}", [meta])
+
+            old_argv = sys.argv
+            old_cwd = os.getcwd()
+            sys.argv = [
+                "agentconvos",
+                "--convo",
+                "agy",
+                "--handoff",
+                "codex",
+                "--yolo",
+                "--dry-run",
+            ]
+            stream = io.StringIO()
+            try:
+                os.chdir(cwd)
+                with (
+                    patch("agentconvos.scanner.scan_projects", return_value=[project]),
+                    patch("agentconvos.app.parse_jsonl", return_value=[]),
+                    patch("agentconvos.app.get_stats", return_value=ConversationStats()),
+                    patch("agentconvos.app.to_markdown", return_value="exported"),
+                    contextlib.redirect_stdout(stream),
+                ):
+                    main()
+            finally:
+                sys.argv = old_argv
+                os.chdir(old_cwd)
+
+        output = stream.getvalue()
+        self.assertIn("Exported: agy123", output)
+        self.assertIn("codex --yolo", output)
+        self.assertNotIn("agy --dangerously-skip-permissions", output)
+        self.assertNotIn("--dangerously-bypass-approvals-and-sandbox", output)
+
+    def test_convo_source_can_handoff_to_claude_yolo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp)
+            convo_path = cwd / "agy.db"
+            _write_agy_db(convo_path)
+            meta = ConversationMeta(
+                path=convo_path,
+                uuid="agy123",
+                slug="",
+                timestamp="2026-06-03T12:00:00",
+                cwd=str(cwd),
+                preview="Previous Agy work",
+                source="agy",
+            )
+            project = Project("agy:tmp", f"[agy] {cwd}", [meta])
+
+            old_argv = sys.argv
+            old_cwd = os.getcwd()
+            sys.argv = [
+                "agentconvos",
+                "--convo",
+                "agy",
+                "--handoff",
+                "claude",
+                "--yolo",
+                "--dry-run",
+            ]
+            stream = io.StringIO()
+            try:
+                os.chdir(cwd)
+                with (
+                    patch("agentconvos.scanner.scan_projects", return_value=[project]),
+                    patch("agentconvos.app.parse_jsonl", return_value=[]),
+                    patch("agentconvos.app.get_stats", return_value=ConversationStats()),
+                    patch("agentconvos.app.to_markdown", return_value="exported"),
+                    contextlib.redirect_stdout(stream),
+                ):
+                    main()
+            finally:
+                sys.argv = old_argv
+                os.chdir(old_cwd)
+
+        output = stream.getvalue()
+        self.assertIn("claude --dangerously-skip-permissions", output)
+        self.assertNotIn("Error: --yolo only applies to Codex", output)
+
+    def test_agy_handoff_and_resume_commands(self):
+        self.assertEqual(
+            _handoff_cmd("agy", "handoff message"),
+            ["agy", "--dangerously-skip-permissions", "--prompt-interactive", "handoff message"],
+        )
+        self.assertEqual(
+            _resume_cmd("agy", "abc123", ["--sandbox"]),
+            ["agy", "--dangerously-skip-permissions", "--sandbox", "--conversation", "abc123"],
+        )
+
+
+class AgyConversationTests(unittest.TestCase):
+    def test_agy_db_uses_history_for_metadata_and_turns(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            agy_home = root / "antigravity-cli"
+            workspace = root / "project"
+            workspace.mkdir()
+            conversation_id = "12345678-1234-4321-9876-123456789abc"
+            db_path = agy_home / "conversations" / f"{conversation_id}.db"
+            _write_agy_db(db_path, "I can help with the agy task.")
+            _write_agy_history(agy_home, conversation_id, workspace)
+
+            with patch.dict(os.environ, {"AGY_HOME": str(agy_home)}):
+                meta = get_meta(db_path)
+                turns = parse_jsonl(db_path)
+
+        self.assertIsNotNone(meta)
+        assert meta is not None
+        self.assertEqual(meta.source, "agy")
+        self.assertEqual(meta.uuid, conversation_id)
+        self.assertEqual(meta.cwd, str(workspace))
+        self.assertEqual(meta.preview, "start agy task")
+        self.assertEqual(meta.timestamp, "2026-06-02T21:38:48.708000Z")
+        self.assertEqual([t.role for t in turns], ["user", "user", "assistant"])
+        self.assertIn("continue agy task", turns[1].text)
+        self.assertIn("I can help with the agy task.", turns[2].text)
+
+    def test_scan_projects_discovers_agy_conversations(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            agy_home = root / "antigravity-cli"
+            workspace = root / "project"
+            workspace.mkdir()
+            conversation_id = "12345678-1234-4321-9876-123456789abc"
+            _write_agy_db(agy_home / "conversations" / f"{conversation_id}.db")
+            _write_agy_history(agy_home, conversation_id, workspace)
+
+            with (
+                patch.dict(os.environ, {"AGY_HOME": str(agy_home)}),
+                patch("agentconvos.scanner._CACHE_PATH", root / "meta-cache.json"),
+            ):
+                projects = scan_projects(source="agy")
+
+        self.assertEqual(len(projects), 1)
+        self.assertEqual(projects[0].display_path, f"[agy] {workspace}")
+        self.assertEqual(projects[0].conversations[0].source, "agy")
 
 
 if __name__ == "__main__":

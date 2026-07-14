@@ -1,6 +1,6 @@
 # agentconvos
 
-Discover, query, and browse AI coding agent conversations. Works with Claude Code, Codex, and Pi.
+Discover, query, and browse AI coding agent conversations. Works with Claude Code, Codex, Pi, and Agy.
 
 Use as a **CLI** (`agentconvos --context --json`), a **Python library** (`from agentconvos import scan_projects`), or an **interactive TUI** (`agentconvos`).
 
@@ -47,8 +47,10 @@ agentconvos --resume <id>              # resume in native CLI
 agentconvos --handoff                  # export context, start new session
 agentconvos --handoff select           # pick from list
 agentconvos --handoff codex            # latest Codex conversation
+agentconvos --convo agy --handoff codex --yolo  # hand off latest Agy conversation into Codex with codex --yolo
+agentconvos --convo agy --handoff claude --yolo # hand off latest Agy conversation into Claude with no prompts
 agentconvos --handoff --handoff-agent codex   # hand off latest conversation into Codex
-agentconvos --handoff --yolo           # hand off into Codex with codex --yolo
+agentconvos --handoff --yolo           # hand off latest conversation to the same agent with no prompts
 ```
 
 ### Export
@@ -97,7 +99,7 @@ stats = get_stats(projects[0].conversations[0].path)
 agentconvos
 ```
 
-Interactive tree grouped by agent (Claude Code, Codex, Pi) with search, multi-select, preview, export, and Gemini analysis.
+Interactive tree grouped by agent (Claude Code, Codex, Pi, Agy) with search, multi-select, preview, export, and Gemini analysis.
 
 | Key | Action |
 |-----|--------|
@@ -117,6 +119,7 @@ Interactive tree grouped by agent (Claude Code, Codex, Pi) with search, multi-se
 | Claude Code logs | `~/.claude/projects/{project}/*.jsonl` |
 | Codex logs | `~/.codex/sessions/*.jsonl`, `~/.codex/conversations/*.json` |
 | Pi logs | `~/.pi/agent/sessions/**/*.jsonl` |
+| Agy logs | `~/.gemini/antigravity-cli/history.jsonl`, `~/.gemini/antigravity-cli/conversations/*.db` |
 | Summaries | `~/.claude/convo-explorer/summaries/` |
 | Analyses | `~/.claude/convo-explorer/analyses/` |
 

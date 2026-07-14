@@ -1,4 +1,4 @@
-"""Scan ~/.claude/projects/, ~/.codex/sessions/, and ~/.pi/agent/sessions/ for conversation logs."""
+"""Scan local agent conversation stores for conversation logs."""
 
 from __future__ import annotations
 
@@ -85,6 +85,18 @@ def _pi_sessions_dir() -> Path:
     return home / ".pi" / "agent" / "sessions"
 
 
+def _agy_home() -> Path:
+    home = os.environ.get("AGY_HOME") or os.environ.get("ANTIGRAVITY_CLI_HOME")
+    if home:
+        return Path(home).expanduser()
+    user_home = Path(os.environ.get("USERPROFILE", Path.home()))
+    return user_home / ".gemini" / "antigravity-cli"
+
+
+def _agy_conversations_dir() -> Path:
+    return _agy_home() / "conversations"
+
+
 def _folder_to_path(folder_name: str) -> str:
     """Best-effort decode of folder name back to a path.
 
@@ -122,7 +134,7 @@ def scan_projects(
 
     Args:
         extra_dirs: Additional project directories to scan.
-        source: Filter by agent — "claude", "codex", or "pi".
+        source: Filter by agent — "claude", "codex", "pi", or "agy".
         after: Only include conversations after this ISO date (e.g. "2026-05-01").
         before: Only include conversations before this ISO date.
     """
@@ -205,6 +217,29 @@ def scan_projects(
             projects.append(Project(
                 folder_name=folder,
                 display_path=f"[pi] {cwd}",
+                conversations=convos,
+            ))
+
+    # Scan Agy/Antigravity CLI sessions — group by workspace cwd
+    agy_base = _agy_conversations_dir()
+    if agy_base.is_dir():
+        agy_convos: list[ConversationMeta] = []
+        for db in agy_base.glob("*.db"):
+            meta = _get_meta_cached(db, cache)
+            if meta:
+                agy_convos.append(meta)
+
+        by_cwd_agy: dict[str, list[ConversationMeta]] = {}
+        for c in agy_convos:
+            key = c.cwd or "(no project)"
+            by_cwd_agy.setdefault(key, []).append(c)
+
+        for cwd, convos in by_cwd_agy.items():
+            convos.sort(key=lambda c: c.timestamp, reverse=True)
+            folder = "agy:" + (Path(cwd).name if cwd and cwd != "(no project)" else "misc")
+            projects.append(Project(
+                folder_name=folder,
+                display_path=f"[agy] {cwd}",
                 conversations=convos,
             ))
 
