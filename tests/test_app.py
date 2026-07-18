@@ -9,6 +9,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import agentconvos.parser as parser_module
 from agentconvos.app import _handoff_agent, _handoff_cmd, _resume_cmd, main
 from agentconvos.parser import ConversationMeta, ConversationStats, get_meta, parse_jsonl
 from agentconvos.scanner import Project, scan_projects
@@ -74,6 +75,55 @@ def _write_agy_history(home: Path, conversation_id: str, workspace: Path) -> Non
         },
     ]
     history.write_text("\n".join(json.dumps(r) for r in records), encoding="utf-8")
+
+
+class CodexParserTests(unittest.TestCase):
+    def test_text_parser_releases_json_records_as_it_streams(self):
+        class TrackedRecord(dict):
+            alive = 0
+            peak = 0
+
+            def __init__(self, value):
+                super().__init__(value)
+                type(self).alive += 1
+                type(self).peak = max(type(self).peak, type(self).alive)
+
+            def __del__(self):
+                type(self).alive -= 1
+
+        records = []
+        for index in range(20):
+            records.extend(
+                (
+                    {
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "user_message",
+                            "message": f"Question number {index}",
+                        },
+                    },
+                    {
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "agent_message",
+                            "message": f"Assistant answer number {index}",
+                        },
+                    },
+                )
+            )
+        pending = iter(records)
+
+        def tracked_loads(_line):
+            return TrackedRecord(next(pending))
+
+        with (
+            patch("builtins.open", return_value=io.StringIO("record\n" * len(records))),
+            patch.object(parser_module.json, "loads", side_effect=tracked_loads),
+        ):
+            turns = parser_module._parse_jsonl_codex(Path("/tmp/session.jsonl"))
+
+        self.assertEqual(len(turns), 40)
+        self.assertLessEqual(TrackedRecord.peak, 3)
 
 
 class HandoffCommandTests(unittest.TestCase):

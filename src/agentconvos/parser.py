@@ -657,23 +657,32 @@ def _summarize_codex_tool(name: str, arguments: str) -> str:
     return keys or "(no args)"
 
 
-def _parse_jsonl_codex(path: Path, detail: str = DETAIL_TEXT) -> list[Turn]:
-    """Parse Codex format .jsonl into turns."""
-    include_tools = detail in (DETAIL_TOOLS, DETAIL_RESULTS, DETAIL_FULL)
-    include_results = detail in (DETAIL_RESULTS, DETAIL_FULL)
-    truncate_results = detail == DETAIL_RESULTS
-
-    # Collect all events
-    events = []
+def _iter_jsonl_records(path: Path):
+    """Yield valid JSON records without retaining the full transcript."""
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
             try:
-                events.append(json.loads(line))
+                yield json.loads(line)
             except json.JSONDecodeError:
                 continue
+
+
+def _parse_jsonl_codex(path: Path, detail: str = DETAIL_TEXT) -> list[Turn]:
+    """Parse Codex format .jsonl into turns."""
+    include_tools = detail in (DETAIL_TOOLS, DETAIL_RESULTS, DETAIL_FULL)
+    include_results = detail in (DETAIL_RESULTS, DETAIL_FULL)
+    truncate_results = detail == DETAIL_RESULTS
+
+    # Result-enriched modes need multiple passes. Text and tool-summary modes
+    # consume records once so very large Codex logs stay memory-bounded.
+    events = (
+        list(_iter_jsonl_records(path))
+        if include_results
+        else _iter_jsonl_records(path)
+    )
 
     # Build tool results map: call_id -> output text
     tool_results: dict[str, str] = {}
