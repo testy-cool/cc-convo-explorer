@@ -1300,6 +1300,160 @@ def _pick_conversation(convos: list, cwd: str):
         return None
 
 
+def _print_fuzzy_preview(path: Path, max_parse_bytes: int = 4_000_000) -> None:
+    """Print a responsive fzf preview, avoiding full parses for huge logs."""
+    from .parser import get_meta
+    from .summarize import load_summaries
+
+    meta = get_meta(path)
+    if not meta:
+        print(f"Unable to read conversation metadata: {path}")
+        return
+
+    summary = load_summaries().get(meta.uuid, "")
+    print(f"{meta.slug or meta.uuid[:8]}  [{meta.source}]")
+    print(f"{_fmt_ts(meta.timestamp) or '?'}")
+    print(f"{meta.cwd or '(unknown project)'}")
+    print(f"Session: {meta.uuid}")
+    if meta.git_branch:
+        print(f"Branch: {meta.git_branch}")
+    if summary:
+        print(f"\nSummary\n{summary}")
+    if meta.preview:
+        print(f"\nFirst prompt\n{meta.preview}")
+
+    try:
+        size = path.stat().st_size
+    except OSError:
+        size = 0
+    if size > max_parse_bytes:
+        print(
+            f"\nLarge transcript ({size / 1_000_000:.1f} MB). "
+            "Press Enter to select it, then use the printed --show command "
+            "for the complete conversation."
+        )
+        return
+
+    turns = parse_jsonl(path, detail=DETAIL_TEXT)
+    if not turns:
+        return
+    print("\nConversation")
+    remaining = 120_000
+    for turn in turns:
+        if remaining <= 0:
+            print("\n… preview truncated; select the session to show the rest")
+            break
+        text = turn.text[:remaining]
+        print(f"\n## {turn.role.title()}\n{text}")
+        remaining -= len(text)
+
+
+def _pick_conversation_fuzzy(
+    convos: list[ConversationMeta],
+    initial_query: str = "",
+    *,
+    fzf_path: str | None = None,
+    runner=None,
+) -> ConversationMeta | None:
+    """Select a conversation with fzf without preloading transcript bodies."""
+    import shlex
+    import shutil
+    import subprocess
+    import sys
+
+    from .summarize import load_summaries
+
+    executable = fzf_path or shutil.which("fzf")
+    if not executable:
+        print("Error: --find requires fzf (https://github.com/junegunn/fzf)")
+        return None
+
+    summaries = load_summaries()
+
+    def field(value: object) -> str:
+        return re.sub(r"\s+", " ", str(value or "")).strip()
+
+    rows: list[str] = []
+    indexed: dict[int, ConversationMeta] = {}
+    home = str(Path.home())
+    for index, meta in enumerate(convos):
+        indexed[index] = meta
+        cwd = meta.cwd or "(unknown project)"
+        display_cwd = "~" + cwd[len(home):] if cwd.startswith(home) else cwd
+        summary = summaries.get(meta.uuid, "")
+        description = summary or meta.preview or "(no preview)"
+        searchable = " ".join(
+            field(value)
+            for value in (
+                meta.uuid,
+                meta.slug,
+                meta.cwd,
+                meta.git_branch,
+                meta.preview,
+                summary,
+            )
+            if value
+        )
+        rows.append(
+            "\t".join(
+                (
+                    str(index),
+                    field(_fmt_ts(meta.timestamp, date_only=True) or "?"),
+                    field(meta.source),
+                    field(display_cwd),
+                    field(meta.slug or meta.uuid[:8]),
+                    field(description),
+                    searchable,
+                    field(meta.path),
+                )
+            )
+        )
+
+    if not rows:
+        print("No conversations found.")
+        return None
+
+    preview_command = (
+        f"{shlex.quote(sys.executable)} -m agentconvos.app --peek {{8}}"
+    )
+    command = [
+        executable,
+        "--delimiter=\t",
+        "--nth=2..7",
+        "--with-nth=2..6",
+        "--height=90%",
+        "--layout=reverse",
+        "--border=rounded",
+        "--info=inline",
+        "--cycle",
+        "--no-multi",
+        "--prompt=Conversations> ",
+        "--header=type to fuzzy-search · enter select · ctrl-/ preview · esc cancel",
+        "--preview-window=right,60%,wrap",
+        "--bind=ctrl-/:toggle-preview",
+        f"--preview={preview_command}",
+    ]
+    if initial_query:
+        command.append(f"--query={initial_query}")
+
+    run = runner or subprocess.run
+    result = run(
+        command,
+        input="\n".join(rows) + "\n",
+        text=True,
+        stdout=subprocess.PIPE,
+        check=False,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        return None
+
+    try:
+        selected_index = int(result.stdout.split("\t", 1)[0])
+    except ValueError:
+        return None
+    return indexed.get(selected_index)
+
+
 def _handoff_cmd(
     source: str,
     message: str,
@@ -1368,8 +1522,18 @@ def main() -> None:
         metavar="QUERY",
         help="Search conversation text using AND terms and quoted phrases",
     )
+    parser.add_argument(
+        "-f",
+        "--find",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="QUERY",
+        help="Open the fast interactive fuzzy conversation finder",
+    )
     parser.add_argument("--list", action="store_true", help="List all projects and conversations")
     parser.add_argument("--show", nargs="+", metavar="ID_OR_PATH", help="Preview conversation (first ~10K words)")
+    parser.add_argument("--peek", metavar="PATH", help=argparse.SUPPRESS)
     parser.add_argument("--open", action="store_true", help="Open in Sublime Text (use with --show or --concat)")
     parser.add_argument(
         "--resume",
@@ -1420,6 +1584,39 @@ def main() -> None:
     )
     if args.detail is None:
         args.detail = "results" if (args.deep or args.analyze) else "text"
+
+
+    if args.peek:
+        _print_fuzzy_preview(Path(args.peek))
+        return
+
+
+    if args.find is not None:
+        from .scanner import scan_projects
+
+        projects = scan_projects(**_scan_kwargs)
+        conversations = [
+            conversation
+            for project in projects
+            for conversation in project.conversations
+        ]
+        selected = _pick_conversation_fuzzy(
+            conversations,
+            initial_query=args.find,
+        )
+        if selected is None:
+            return
+
+        name = selected.slug or selected.uuid[:8]
+        date = _fmt_ts(selected.timestamp, date_only=True) or "?"
+        print(f"Selected: {date}  [{selected.source}]  {name}")
+        print(f"ID: {selected.uuid}")
+        print(f"CWD: {selected.cwd or '(unknown)'}")
+        print(f"File: {selected.path}")
+        print(f"Show: agentconvos --show {selected.uuid}")
+        if _resume_cmd(selected.source, selected.uuid) is not None:
+            print(f"Resume: agentconvos --resume {selected.uuid}")
+        return
 
 
     if args.search:
@@ -1896,7 +2093,7 @@ def _resolve_args(args: list[str], extra_dirs: list[Path] | None = None) -> list
     ids_to_resolve = []
     for arg in args:
         p = P(arg)
-        if p.exists() and p.suffix == ".jsonl":
+        if p.is_file():
             file_paths.append(p)
         else:
             ids_to_resolve.append(arg)

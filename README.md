@@ -36,6 +36,20 @@ agentconvos --search "auth" --source claude --json
 Search is case-insensitive. Separate words use AND matching across a conversation,
 quoted text stays together as an exact phrase, and the strongest matches appear first.
 
+### Fast interactive find
+
+```bash
+agentconvos --find                    # open the fuzzy conversation picker
+agentconvos -f "auth reqid"           # start with a fuzzy query
+agentconvos -f --source codex         # limit the picker to one agent
+```
+
+This skips the Textual TUI and opens a lightweight `fzf` picker instead. It searches
+cached session IDs, titles, paths, branches, first prompts, and saved summaries as you
+type. The highlighted conversation is parsed lazily in the preview pane, so launching
+the picker stays fast even with a large history. Press Enter to print the exact session
+ID plus ready-to-copy `--show` and `--resume` commands. Requires `fzf` on `PATH`.
+
 ### List and filter
 
 ```bash
