@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import agentconvos.parser as parser_module
+import agentconvos.scanner as scanner_module
 from agentconvos.app import _handoff_agent, _handoff_cmd, _resume_cmd, main
 from agentconvos.parser import ConversationMeta, ConversationStats, get_meta, parse_jsonl
 from agentconvos.scanner import Project, scan_projects
@@ -78,6 +79,47 @@ def _write_agy_history(home: Path, conversation_id: str, workspace: Path) -> Non
 
 
 class CodexParserTests(unittest.TestCase):
+    def test_subagent_metadata_keeps_its_own_first_session_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "rollout-child-session.jsonl"
+            records = [
+                {
+                    "type": "session_meta",
+                    "payload": {
+                        "id": "child-session",
+                        "session_id": "parent-session",
+                        "parent_thread_id": "parent-session",
+                        "timestamp": "2026-07-18T10:30:00Z",
+                        "cwd": str(path.parent),
+                    },
+                },
+                {
+                    "type": "session_meta",
+                    "payload": {
+                        "id": "parent-session",
+                        "timestamp": "2026-07-17T10:30:00Z",
+                        "cwd": str(path.parent),
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "user_message",
+                        "message": "Inspect the background worker",
+                    },
+                },
+            ]
+            path.write_text(
+                "\n".join(json.dumps(record) for record in records),
+                encoding="utf-8",
+            )
+
+            meta = get_meta(path)
+
+        self.assertIsNotNone(meta)
+        self.assertEqual(meta.uuid, "child-session")
+        self.assertEqual(meta.timestamp, "2026-07-18T10:30:00Z")
+
     def test_text_parser_releases_json_records_as_it_streams(self):
         class TrackedRecord(dict):
             alive = 0
@@ -124,6 +166,31 @@ class CodexParserTests(unittest.TestCase):
 
         self.assertEqual(len(turns), 40)
         self.assertLessEqual(TrackedRecord.peak, 3)
+
+
+class ScannerCacheTests(unittest.TestCase):
+    def test_old_metadata_cache_is_invalidated_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_path = Path(tmp) / "meta-cache.json"
+            cache_path.write_text(
+                json.dumps({"/tmp/session.jsonl": {"uuid": "stale-parent"}}),
+                encoding="utf-8",
+            )
+
+            with patch.object(scanner_module, "_CACHE_PATH", cache_path):
+                self.assertEqual(scanner_module._load_cache(), {})
+                scanner_module._save_cache(
+                    {"/tmp/session.jsonl": {"uuid": "child-session"}}
+                )
+                reloaded = scanner_module._load_cache()
+
+            persisted = json.loads(cache_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(
+            reloaded,
+            {"/tmp/session.jsonl": {"uuid": "child-session"}},
+        )
+        self.assertEqual(persisted["__version__"], 2)
 
 
 class HandoffCommandTests(unittest.TestCase):

@@ -260,7 +260,7 @@ def _get_meta_codex(path: Path) -> ConversationMeta | None:
                 rtype = rec.get("type", "")
                 payload = rec.get("payload", {})
 
-                if rtype == "session_meta":
+                if rtype == "session_meta" and not session_id:
                     session_id = payload.get("id", path.stem)
                     timestamp = payload.get("timestamp", rec.get("timestamp", ""))
                     cwd = payload.get("cwd", "")

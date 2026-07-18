@@ -10,18 +10,23 @@ from pathlib import Path
 from .parser import ConversationMeta, get_meta
 
 _CACHE_PATH = Path(os.environ.get("USERPROFILE", Path.home())) / ".claude" / "convo-explorer" / "meta-cache.json"
+_CACHE_VERSION = 2
 
 
 def _load_cache() -> dict:
     try:
-        return json.loads(_CACHE_PATH.read_text(encoding="utf-8"))
+        cache = json.loads(_CACHE_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
+    if not isinstance(cache, dict) or cache.pop("__version__", None) != _CACHE_VERSION:
+        return {}
+    return cache
 
 
 def _save_cache(cache: dict) -> None:
     _CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _CACHE_PATH.write_text(json.dumps(cache), encoding="utf-8")
+    payload = {"__version__": _CACHE_VERSION, **cache}
+    _CACHE_PATH.write_text(json.dumps(payload), encoding="utf-8")
 
 
 def _get_meta_cached(path: Path, cache: dict) -> ConversationMeta | None:
