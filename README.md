@@ -121,10 +121,16 @@ agentconvos
 
 Interactive tree grouped by agent (Claude Code, Codex, Pi, Agy) with search, multi-select, preview, export, and Gemini analysis.
 
-Search runs across full conversation text as you type. Matching terms and their
-surrounding context appear directly in the tree; press Enter to open the first
-match. Search previews center and highlight matching turns. Resume asks for
-confirmation with the agent, working directory, full session ID, and command.
+The history tree renders from cached metadata immediately. A persistent SQLite
+full-text index updates in the background, with progress shown in the lower-right
+badge; only new or changed transcripts are parsed on later starts. Search results
+appear live while a first-time index is still filling.
+
+The search box is focused at launch and searches titles, prompts, paths, branches,
+summaries, and full conversation text. Matching context appears directly in the
+tree; press Enter to open the first match. Conversation previews parse lazily and
+highlight the matching turns. Resume asks for confirmation with the agent, working
+directory, full session ID, and command.
 
 | Key | Action |
 |-----|--------|
@@ -145,6 +151,7 @@ confirmation with the agent, working directory, full session ID, and command.
 | Codex logs | `~/.codex/sessions/*.jsonl`, `~/.codex/conversations/*.json` |
 | Pi logs | `~/.pi/agent/sessions/**/*.jsonl` |
 | Agy logs | `~/.gemini/antigravity-cli/history.jsonl`, `~/.gemini/antigravity-cli/conversations/*.db` |
+| Full-text search index | `~/.claude/convo-explorer/search-index.sqlite3` |
 | Summaries | `~/.claude/convo-explorer/summaries/` |
 | Analyses | `~/.claude/convo-explorer/analyses/` |
 
