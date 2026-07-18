@@ -130,8 +130,86 @@ def _export_stem(meta: ConversationMeta) -> str:
     proj = Path(meta.cwd).name if meta.cwd else ""
     short_id = meta.uuid[:8]
     return f"{proj}-{short_id}" if proj else short_id
-from .parser import ConversationMeta, parse_jsonl, to_markdown, get_stats, search_conversations, DETAIL_TEXT, DETAIL_TOOLS, DETAIL_RESULTS, DETAIL_FULL
+from .parser import (
+    ConversationMeta,
+    DETAIL_FULL,
+    DETAIL_RESULTS,
+    DETAIL_TEXT,
+    DETAIL_TOOLS,
+    get_stats,
+    parse_jsonl,
+    parse_search_terms,
+    search_conversations,
+    to_markdown,
+)
 from .analyzer import MODELS, DEFAULT_MODEL, SINGLE_PROMPT, MULTI_PROMPT
+
+
+def _match_ranges(text: str, terms: list[str]) -> list[tuple[int, int]]:
+    """Return non-overlapping ranges for every case-insensitive term match."""
+    candidates: list[tuple[int, int]] = []
+    for term in sorted(set(terms), key=len, reverse=True):
+        if not term:
+            continue
+        candidates.extend(
+            (match.start(), match.end())
+            for match in re.finditer(re.escape(term), text, flags=re.IGNORECASE)
+        )
+
+    ranges: list[tuple[int, int]] = []
+    for start, end in sorted(candidates, key=lambda item: (item[0], -(item[1] - item[0]))):
+        if ranges and start < ranges[-1][1]:
+            continue
+        ranges.append((start, end))
+    return ranges
+
+
+def _highlight_matches(text: str, terms: list[str], style: str = "") -> Text:
+    """Render text with high-contrast search matches for the tree."""
+    rendered = Text(text, style=style)
+    for start, end in _match_ranges(text, terms):
+        rendered.stylize("bold #111111 on #ffd75f", start, end)
+    return rendered
+
+
+def _matching_excerpt(text: str, terms: list[str], width: int = 90) -> str:
+    """Return compact context around the earliest matching search term."""
+    flattened = re.sub(r"\s+", " ", text).strip()
+    if not flattened:
+        return ""
+    ranges = _match_ranges(flattened, terms)
+    if not ranges:
+        return flattened if len(flattened) <= width else flattened[: max(1, width - 1)].rstrip() + "…"
+
+    match_start, _ = ranges[0]
+    content_width = max(20, width - 2)
+    start = max(0, match_start - content_width // 3)
+    end = min(len(flattened), start + content_width)
+    if end == len(flattened):
+        start = max(0, end - content_width)
+    prefix = "…" if start else ""
+    suffix = "…" if end < len(flattened) else ""
+    return prefix + flattened[start:end].strip() + suffix
+
+
+def _escape_markdown_inline(text: str) -> str:
+    return re.sub(r"([\\`*_\[\]])", r"\\\1", text)
+
+
+def _highlight_markdown(text: str, terms: list[str]) -> str:
+    """Make query matches visibly bold while safely embedding preview text."""
+    ranges = _match_ranges(text, terms)
+    if not ranges:
+        return _escape_markdown_inline(text)
+
+    parts: list[str] = []
+    cursor = 0
+    for start, end in ranges:
+        parts.append(_escape_markdown_inline(text[cursor:start]))
+        parts.append(f"**{_escape_markdown_inline(text[start:end])}**")
+        cursor = end
+    parts.append(_escape_markdown_inline(text[cursor:]))
+    return "".join(parts)
 
 
 def _export_date(meta: ConversationMeta) -> str:
@@ -182,6 +260,49 @@ class ExportNameScreen(ModalScreen[str]):
         self.dismiss("")
 
 
+class ResumeScreen(ModalScreen[bool]):
+    """Confirm exactly which native session and directory will be resumed."""
+
+    CSS = """
+    ResumeScreen { align: center middle; }
+    #resume-dialog { width: 76; height: auto; border: thick $accent; background: $surface; padding: 1 2; }
+    #resume-title { text-style: bold; margin-bottom: 1; }
+    #resume-details { color: $text-muted; margin-bottom: 1; }
+    #resume-actions { height: 3; align-horizontal: right; }
+    #resume-actions Button { min-width: 16; margin-left: 1; }
+    """
+
+    BINDINGS = [
+        Binding("escape", "dismiss_resume", "Cancel", priority=True),
+        Binding("enter", "confirm_resume", "Resume", priority=True),
+    ]
+
+    def __init__(self, meta: ConversationMeta) -> None:
+        super().__init__()
+        self.meta = meta
+
+    def compose(self) -> ComposeResult:
+        agent_name = _SOURCE_STYLE.get(self.meta.source, (self.meta.source.title(), ""))[0]
+        with Vertical(id="resume-dialog"):
+            yield Static("Resume this session?", id="resume-title")
+            yield Static(_resume_description(self.meta), id="resume-details", markup=False)
+            with Horizontal(id="resume-actions"):
+                yield Button("Cancel", id="resume-cancel")
+                yield Button(f"Resume in {agent_name}", id="resume-confirm", variant="primary")
+
+    def on_mount(self) -> None:
+        self.query_one("#resume-confirm", Button).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "resume-confirm")
+
+    def action_confirm_resume(self) -> None:
+        self.dismiss(True)
+
+    def action_dismiss_resume(self) -> None:
+        self.dismiss(False)
+
+
 ANALYSES_DIR = Path(os.environ.get("USERPROFILE", Path.home())) / ".claude" / "convo-explorer" / "analyses"
 
 
@@ -218,6 +339,7 @@ class ConvoExplorer(App):
     #resize-handle:hover { background: $accent; }
     #content { width: 1fr; }
     #filter-input { dock: top; }
+    #filter-input:focus { border: tall $accent; }
     #nav-tree { height: 1fr; }
     #preview-scroll { height: 1fr; }
     #preview { padding: 1 2; }
@@ -242,7 +364,7 @@ class ConvoExplorer(App):
         Binding("m", "cycle_model", "Model", priority=False),
         Binding("p", "edit_prompt", "Edit prompt", priority=False),
         Binding("o", "open_folder", "Open folder", priority=False),
-        Binding("escape", "cancel", "Cancel", priority=True),
+        Binding("escape", "cancel", "Cancel", priority=False),
         Binding("slash", "search", "Search", priority=False),
         Binding("r", "resume", "Resume session", priority=False),
         Binding("h", "handoff", "Handoff to new session", priority=False),
@@ -265,13 +387,14 @@ class ConvoExplorer(App):
         self._last_action: str = ""  # "analysis" or "export"
         self._resume_meta: ConversationMeta | None = None  # set when user wants to resume
         self._handoff_meta: ConversationMeta | None = None  # set when user wants to handoff
-        self._search_cache: dict[str, str] = {}  # uuid -> searchable text (last 10 turns)
+        self._search_cache: dict[str, str] = {}  # uuid -> original conversation text
+        self._search_index: dict[str, str] = {}  # uuid -> case-folded conversation text
 
     def compose(self) -> ComposeResult:
         yield Header()
         with Horizontal(id="main"):
             with Vertical(id="sidebar"):
-                yield Input(placeholder="Filter convos...  (Enter for deep search)", id="filter-input")
+                yield Input(placeholder="Search all conversation text…  Enter opens first match", id="filter-input")
                 yield Static("PROJECTS", classes="panel-title", id="left-title")
                 yield Tree("Conversations", id="nav-tree")
             yield Static("┃", id="resize-handle")
@@ -319,16 +442,19 @@ class ConvoExplorer(App):
     @work(thread=True)
     def load_projects(self) -> None:
         projects = scan_projects(extra_dirs=self._extra_dirs)
-        # Build search cache: full conversation text
+        # Build search cache once so live search can show real match context.
         cache = {}
+        index = {}
         for p in projects:
             for c in p.conversations:
                 try:
                     turns = parse_jsonl(c.path)
-                    cache[c.uuid] = "\n".join(t.text for t in turns).lower()
+                    cache[c.uuid] = "\n".join(t.text for t in turns)
                 except Exception:
                     cache[c.uuid] = ""
+                index[c.uuid] = cache[c.uuid].casefold()
         self._search_cache = cache
+        self._search_index = index
         self.call_from_thread(self._populate_tree, projects)
 
     def _get_analyzed_set(self) -> set[str]:
@@ -352,7 +478,7 @@ class ConvoExplorer(App):
         tree = self.query_one(Tree)
         tree.clear()
         tree.root.data = None
-        ft = filter_text.strip().lower()
+        terms = parse_search_terms(filter_text)
 
         summaries = {}
         try:
@@ -369,14 +495,22 @@ class ConvoExplorer(App):
 
         for proj in projects:
             convos = proj.conversations
-            if ft:
-                convos = [
-                    c for c in convos
-                    if ft in (self._search_cache.get(c.uuid, "") or "").lower()
-                    or ft in (c.slug or "").lower()
-                    or ft in c.uuid.lower()
-                    or ft in proj.display_path.lower()
-                ]
+            if terms:
+                matches = []
+                for c in convos:
+                    content = self._search_index.get(c.uuid, "")
+                    metadata = "\n".join(
+                        (
+                            c.slug or "",
+                            c.uuid,
+                            c.preview or "",
+                            summaries.get(c.uuid, ""),
+                            proj.display_path,
+                        )
+                    ).casefold()
+                    if all(term in content or term in metadata for term in terms):
+                        matches.append(c)
+                convos = matches
             if not convos:
                 continue
 
@@ -388,7 +522,7 @@ class ConvoExplorer(App):
             filtered_count += len(convos)
 
         self.query_one("#left-title", Static).update(
-            f" PROJECTS ({filtered_count})"
+            f" {'SEARCH RESULTS' if terms else 'PROJECTS'} ({filtered_count})"
         )
 
         # Find which source/group contains the cwd project
@@ -430,7 +564,7 @@ class ConvoExplorer(App):
             source_node = tree.root.add(
                 src_label,
                 data=NodeData(kind="group"),
-                expand=is_cwd_source or bool(ft),
+                expand=is_cwd_source or bool(terms),
             )
 
             # Order path groups: cwd group first, ~/Work, then sorted, Other last
@@ -453,9 +587,9 @@ class ConvoExplorer(App):
                 )
 
                 pg_node = source_node.add(
-                    Text(gkey),
+                    _highlight_matches(gkey, terms),
                     data=NodeData(kind="group"),
-                    expand=has_cwd or bool(ft),
+                    expand=has_cwd or bool(terms),
                 )
 
                 def _proj_sort_key(item):
@@ -473,32 +607,41 @@ class ConvoExplorer(App):
                     plabel = Text()
                     if is_cwd:
                         plabel.append("● ", "bold cyan")
-                    plabel.append(f"{rel_label}  ({count})  {date_str}")
+                    plabel.append_text(
+                        _highlight_matches(f"{rel_label}  ({count})  {date_str}", terms)
+                    )
                     if self._is_analyzed(proj.folder_name):
                         plabel.append(" ★", "yellow")
 
                     pnode = pg_node.add(
                         plabel,
                         data=NodeData(kind="project", project=proj, is_cwd=is_cwd),
-                        expand=is_cwd or bool(ft),
+                        expand=is_cwd or bool(terms),
                     )
 
                     for c in convos:
                         d = _fmt_ts(c.timestamp)
                         slug = c.slug or c.uuid[:8]
                         summary = summaries.get(c.uuid, "")
-                        if summary:
+                        content = self._search_cache.get(c.uuid, "") or ""
+                        folded_content = self._search_index.get(c.uuid, "")
+                        if terms and any(term in folded_content for term in terms):
+                            preview = _matching_excerpt(content, terms, width=64)
+                        elif summary:
                             preview = summary[:60]
                         else:
                             preview = (c.preview or "")[:45]
+                        label = f"  {d}  {slug}  {preview}"
                         pnode.add_leaf(
-                            Text(f"  {d}  {slug}  {preview}"),
+                            _highlight_matches(label, terms),
                             data=NodeData(kind="convo", meta=c, project=proj),
                         )
 
-        self.query_one("#status-bar", Static).update(
-            f" {total_projects} projects · {filtered_count} conversations · / search · S select · Tab switch · A analyze · E export"
-        )
+        if terms:
+            status = f" {filtered_count} matches · Enter open first · R resume · Esc clear search"
+        else:
+            status = f" {total_projects} projects · {filtered_count} conversations · / search · S select · Tab switch · A analyze · E export"
+        self.query_one("#status-bar", Static).update(status)
 
     def _refresh_analyzed_markers(self) -> None:
         """Re-scan analyses dir and update ★ markers on project nodes."""
@@ -534,25 +677,76 @@ class ConvoExplorer(App):
 
         if data.kind == "convo" and data.meta:
             self.current_meta = data.meta
-            self.load_preview(data.meta)
+            query = self.query_one("#filter-input", Input).value.strip()
+            self.load_preview(data.meta, query)
 
     @work(thread=True)
-    def load_preview(self, meta: ConversationMeta) -> None:
+    def load_preview(self, meta: ConversationMeta, query: str = "") -> None:
         turns = parse_jsonl(meta.path)
         meta.turn_count = len(turns)
+        terms = parse_search_terms(query)
+
+        if terms:
+            phrase = " ".join(terms)
+            matches: list[tuple[int, int, object]] = []
+            for index, turn in enumerate(turns):
+                folded = turn.text.casefold()
+                matched_terms = [term for term in terms if term in folded]
+                if not matched_terms:
+                    continue
+                score = (
+                    (1000 if phrase and phrase in folded else 0)
+                    + 100 * len(matched_terms)
+                    + sum(folded.count(term) for term in matched_terms)
+                )
+                matches.append((score, index, turn))
+
+            if matches:
+                matches.sort(key=lambda item: (item[0], -item[1]), reverse=True)
+                visible = matches[:20]
+                title = _highlight_markdown(meta.slug or meta.uuid, terms)
+                cwd = _highlight_markdown(meta.cwd or "(unknown)", terms)
+                lines = [
+                    f"## {title}",
+                    f"**Search:** {_escape_markdown_inline(query)}  ",
+                    f"**Matches:** {len(matches)} turns  ",
+                    f"**Date:** {meta.timestamp[:19]}  ",
+                    f"**CWD:** {cwd}  ",
+                    f"**Session ID:** `{meta.uuid}`",
+                    "",
+                    "---",
+                    "",
+                ]
+                for _score, index, turn in visible:
+                    excerpt = _matching_excerpt(turn.text, terms, width=320)
+                    highlighted = _highlight_markdown(excerpt, terms)
+                    lines.append(f"### Turn {index + 1} · {turn.role.title()}")
+                    lines.append(f"> {highlighted}\n")
+                if len(matches) > len(visible):
+                    lines.append(f"*Showing the best {len(visible)} of {len(matches)} matching turns.*")
+                self.call_from_thread(
+                    self._set_preview,
+                    "\n".join(lines),
+                    len(matches),
+                    f"MATCHES ({len(matches)} turns) · R RESUME",
+                )
+                return
+
         # Show last 10 turns for quick preview
         tail = turns[-10:] if len(turns) > 10 else turns
         md = to_markdown(tail)
         skipped = len(turns) - len(tail)
-        header = f"## {meta.slug or meta.uuid}\n**Date:** {meta.timestamp[:19]}  \n**CWD:** {meta.cwd}\n**Turns:** {len(turns)} total"
+        title = _highlight_markdown(meta.slug or meta.uuid, terms)
+        cwd = _highlight_markdown(meta.cwd or "(unknown)", terms)
+        header = f"## {title}\n**Date:** {meta.timestamp[:19]}  \n**CWD:** {cwd}  \n**Session ID:** `{meta.uuid}`  \n**Turns:** {len(turns)} total"
         if skipped:
             header += f" (showing last {len(tail)})"
         header += "\n\n---\n\n"
         self.call_from_thread(self._set_preview, header + md, len(turns))
 
-    def _set_preview(self, md: str, turn_count: int) -> None:
+    def _set_preview(self, md: str, turn_count: int, title: str | None = None) -> None:
         self.query_one("#preview", Markdown).update(md)
-        label = f"PREVIEW ({turn_count} turns)" if turn_count else "PREVIEW"
+        label = title or (f"PREVIEW ({turn_count} turns)" if turn_count else "PREVIEW")
         self.query_one("#right-title", Static).update(label)
         self.query_one("#preview-scroll", VerticalScroll).scroll_home()
 
@@ -560,19 +754,33 @@ class ConvoExplorer(App):
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "filter-input":
-            self._populate_tree(self.projects, filter_text=event.value.lower().strip())
-            # Auto-preview if filter narrows to exactly 1 conversation
+            query = event.value.strip()
+            self._populate_tree(self.projects, filter_text=query)
             tree = self.query_one("#nav-tree", Tree)
             all_convos = [
                 cnode for cnode in self._walk_tree_nodes(tree.root)
                 if cnode.data and cnode.data.kind == "convo"
             ]
-            if len(all_convos) == 1:
-                node = all_convos[0]
-                tree.select_node(node)
-                if node.data.meta:
-                    self.current_meta = node.data.meta
-                    self.load_preview(node.data.meta)
+            if query:
+                count = len(all_convos)
+                if count:
+                    noun = "conversation" if count == 1 else "conversations"
+                    self._set_preview(
+                        f'## {count} {noun} match “{_escape_markdown_inline(query)}”\n\n'
+                        "Press **Enter** to open the first result, then **R** to resume it.\n\n"
+                        "Matching words are highlighted in the tree with their surrounding context.",
+                        0,
+                        f"SEARCH ({count})",
+                    )
+                else:
+                    self._set_preview(
+                        f'## No matches for “{_escape_markdown_inline(query)}”\n\n'
+                        "Try fewer words, or put an exact phrase in quotes.",
+                        0,
+                        "SEARCH (0)",
+                    )
+            elif self.current_meta:
+                self.load_preview(self.current_meta)
 
     # --- Multi-select ---
 
@@ -991,7 +1199,16 @@ class ConvoExplorer(App):
         if self.current_meta.source not in ("claude", "codex", "agy"):
             self.notify(f"Resume not supported for {self.current_meta.source.title()} conversations", severity="warning")
             return
-        self._resume_meta = self.current_meta
+        meta = self.current_meta
+        self.push_screen(
+            ResumeScreen(meta),
+            lambda confirmed: self._confirm_resume(meta, confirmed),
+        )
+
+    def _confirm_resume(self, meta: ConversationMeta, confirmed: bool | None) -> None:
+        if not confirmed:
+            return
+        self._resume_meta = meta
         self.exit()
 
     # --- Handoff ---
@@ -1011,34 +1228,23 @@ class ConvoExplorer(App):
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id == "filter-input" and event.value.strip():
-            # Enter in filter: deep search across all conversation content
-            self.do_search(event.value.strip())
-
-    @work(thread=True)
-    def do_search(self, query: str) -> None:
-        self.call_from_thread(
-            lambda: self.query_one("#right-title", Static).update(f"SEARCHING: \"{query}\"...")
-        )
-        all_paths = [c.path for p in self.projects for c in p.conversations]
-        hits = search_conversations(all_paths, query)
-        if not hits:
-            self.call_from_thread(self._set_preview, f"## No results for \"{query}\"\n\nSearched {len(all_paths)} conversations.", 0)
-            self.call_from_thread(
-                lambda: self.query_one("#right-title", Static).update("SEARCH RESULTS (0)")
+            tree = self.query_one("#nav-tree", Tree)
+            first_match = next(
+                (
+                    node
+                    for node in self._walk_tree_nodes(tree.root)
+                    if node.data and node.data.kind == "convo"
+                ),
+                None,
             )
-            return
-        # Format results
-        lines = [f"## Search: \"{query}\"\n\n**{len(hits)} matches** across {len(all_paths)} conversations\n"]
-        for hit in hits:
-            name = hit.meta.slug or hit.meta.uuid[:8]
-            ts = hit.meta.timestamp[:10] if hit.meta.timestamp else "?"
-            lines.append(f"### {name} ({ts}) — turn {hit.turn_index + 1} ({hit.role})")
-            lines.append(f"> {hit.snippet}\n")
-        md = "\n".join(lines)
-        self.call_from_thread(self._set_preview, md, len(hits))
-        self.call_from_thread(
-            lambda: self.query_one("#right-title", Static).update(f"SEARCH RESULTS ({len(hits)})")
-        )
+            if first_match is None:
+                self.notify("No matching conversations", severity="warning")
+                return
+            tree.select_node(first_match)
+            tree.focus()
+            if first_match.data.meta:
+                self.current_meta = first_match.data.meta
+                self.load_preview(first_match.data.meta, event.value.strip())
 
     def action_cancel(self) -> None:
         if self._analyzing:
@@ -1131,6 +1337,23 @@ def _resume_cmd(source: str, uuid: str, extra_args: list[str] | None = None) -> 
     return None
 
 
+def _resume_description(meta: ConversationMeta) -> str:
+    """Build the concrete, user-visible details for a resume confirmation."""
+    agent_name = _SOURCE_STYLE.get(meta.source, (meta.source.title(), ""))[0]
+    name = meta.slug or meta.uuid[:8]
+    cmd = _resume_cmd(meta.source, meta.uuid)
+    command = " ".join(cmd) if cmd else "Resume is not supported"
+    return "\n".join(
+        (
+            f"{agent_name} · {name}",
+            f"Date: {meta.timestamp[:19] or '(unknown)'}",
+            f"CWD: {meta.cwd or '(unknown)'}",
+            f"Session ID: {meta.uuid}",
+            f"Command: {command}",
+        )
+    )
+
+
 def main() -> None:
     import argparse
     parser = argparse.ArgumentParser(description="Browse and analyze Claude Code, Codex, Pi, and Agy conversations")
@@ -1140,11 +1363,21 @@ def main() -> None:
     parser.add_argument("--prompt", metavar="TEXT_OR_FILE", help="Custom analysis prompt (inline text or path to .txt/.md file). Use {content} as placeholder for conversation text, {count} for multi-convo count.")
     parser.add_argument("--detail", choices=["text", "tools", "results", "full", "thinking"], default=None, help="Detail level: text, tools, results, full, thinking (text + reasoning blocks)")
     parser.add_argument("--deep", nargs="+", metavar="ID_OR_PATH", help="Deep analysis: Pro for first chunk, Flash continues with context, Pro synthesizes. Uses full detail.")
-    parser.add_argument("--search", metavar="QUERY", help="Search all conversations for a string")
+    parser.add_argument(
+        "--search",
+        metavar="QUERY",
+        help="Search conversation text using AND terms and quoted phrases",
+    )
     parser.add_argument("--list", action="store_true", help="List all projects and conversations")
     parser.add_argument("--show", nargs="+", metavar="ID_OR_PATH", help="Preview conversation (first ~10K words)")
     parser.add_argument("--open", action="store_true", help="Open in Sublime Text (use with --show or --concat)")
-    parser.add_argument("--resume", nargs=1, metavar="ID_OR_PATH", help="Resume a conversation with its native CLI (add extra CLI flags after --)")
+    parser.add_argument(
+        "--resume",
+        nargs="?",
+        const="latest",
+        metavar="ID_OR_MODE",
+        help="Resume a conversation in its native CLI. With no value, resume the latest resumable session for CWD; use 'select' to choose.",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Print the command instead of running it (use with --resume/--handoff)")
     parser.add_argument("--handoff", nargs="?", const="latest", default=None, metavar="MODE",
                         help="Export CWD conversation and start new session. Use --convo SOURCE --handoff AGENT to split source and target.")
@@ -1291,15 +1524,40 @@ def main() -> None:
                     print(f"           {summary}")
         return
 
-    if args.resume:
-        paths = _resolve_args(args.resume, extra_dirs=_extra_dirs)
-        if not paths:
-            return
-        from .parser import get_meta
-        meta = get_meta(paths[0])
-        if not meta:
-            print(f"Error: could not read metadata from {paths[0]}")
-            return
+    if args.resume is not None:
+        if args.resume in ("latest", "select"):
+            from .scanner import scan_projects
+
+            cwd = os.path.realpath(os.getcwd())
+            projects = scan_projects(**_scan_kwargs)
+            cwd_convos = [
+                c
+                for project in projects
+                for c in project.conversations
+                if c.cwd
+                and os.path.realpath(c.cwd) == cwd
+                and c.source in ("claude", "codex", "agy")
+            ]
+            cwd_convos.sort(key=lambda c: c.timestamp or "", reverse=True)
+            if not cwd_convos:
+                source_note = f" from {source_arg}" if source_arg else ""
+                print(f"No resumable conversations found{source_note} for {cwd}")
+                return
+            if args.resume == "select" and len(cwd_convos) > 1:
+                meta = _pick_conversation(cwd_convos, cwd)
+                if meta is None:
+                    return
+            else:
+                meta = cwd_convos[0]
+        else:
+            paths = _resolve_args([args.resume], extra_dirs=_extra_dirs)
+            if not paths:
+                return
+            from .parser import get_meta
+            meta = get_meta(paths[0])
+            if not meta:
+                print(f"Error: could not read metadata from {paths[0]}")
+                return
         cmd = _resume_cmd(meta.source, meta.uuid, remaining)
         if cmd is None:
             print(f"Error: resume not supported for {meta.source.title()} conversations (use handoff instead)")

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -1100,13 +1101,64 @@ class SearchHit:
     snippet: str  # context around match
 
 
-def search_conversations(paths: list[Path], query: str, max_hits: int = 50) -> list[SearchHit]:
-    """Search across conversation files for a string (case-insensitive).
+def parse_search_terms(query: str) -> list[str]:
+    """Parse a search query into unique, case-insensitive AND terms.
 
-    Returns matches with surrounding context.
+    Quoted text stays together as a phrase. Unclosed quotes degrade to a
+    whitespace split so an in-progress TUI query still produces results.
     """
-    query_lower = query.lower()
-    hits: list[SearchHit] = []
+    query = query.strip()
+    if not query:
+        return []
+    try:
+        raw_terms = shlex.split(query)
+    except ValueError:
+        raw_terms = query.split()
+
+    terms: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_terms:
+        term = " ".join(raw.split()).casefold()
+        if term and term not in seen:
+            seen.add(term)
+            terms.append(term)
+    return terms
+
+
+def _search_snippet(text: str, terms: list[str], width: int = 140) -> str:
+    """Return one line of context centered on the strongest visible match."""
+    flattened = re.sub(r"\s+", " ", text).strip()
+    if not flattened:
+        return ""
+
+    folded = flattened.casefold()
+    phrase = " ".join(terms)
+    phrase_pos = folded.find(phrase) if phrase else -1
+    positions = [folded.find(term) for term in terms if folded.find(term) >= 0]
+    pos = phrase_pos if phrase_pos >= 0 else (min(positions) if positions else 0)
+
+    content_width = max(20, width - 2)
+    start = max(0, pos - content_width // 3)
+    end = min(len(flattened), start + content_width)
+    if end == len(flattened):
+        start = max(0, end - content_width)
+    prefix = "…" if start else ""
+    suffix = "…" if end < len(flattened) else ""
+    return prefix + flattened[start:end].strip() + suffix
+
+
+def search_conversations(paths: list[Path], query: str, max_hits: int = 50) -> list[SearchHit]:
+    """Search conversations with quoted phrases, AND terms, and relevance.
+
+    All terms must occur somewhere in a conversation. Matching turns are then
+    ranked so exact phrases and turns containing more query terms appear first.
+    """
+    terms = parse_search_terms(query)
+    if not terms:
+        return []
+
+    phrase = " ".join(terms)
+    scored_hits: list[tuple[int, str, SearchHit]] = []
     for path in paths:
         meta = get_meta(path)
         if not meta:
@@ -1115,23 +1167,34 @@ def search_conversations(paths: list[Path], query: str, max_hits: int = 50) -> l
             turns = parse_jsonl(path)
         except Exception:
             continue
+
+        conversation_text = "\n".join(turn.text for turn in turns).casefold()
+        if not all(term in conversation_text for term in terms):
+            continue
+
         for i, turn in enumerate(turns):
-            text_lower = turn.text.lower()
-            pos = text_lower.find(query_lower)
-            if pos == -1:
+            text_folded = turn.text.casefold()
+            matched_terms = [term for term in terms if term in text_folded]
+            if not matched_terms:
                 continue
-            # Extract snippet with context
-            start = max(0, pos - 60)
-            end = min(len(turn.text), pos + len(query) + 60)
-            snippet = turn.text[start:end].replace("\n", " ")
-            if start > 0:
-                snippet = "..." + snippet
-            if end < len(turn.text):
-                snippet += "..."
-            hits.append(SearchHit(meta=meta, turn_index=i, role=turn.role, snippet=snippet))
-            if len(hits) >= max_hits:
-                return hits
-    return hits
+
+            exact_phrase = bool(phrase and phrase in text_folded)
+            term_occurrences = sum(text_folded.count(term) for term in matched_terms)
+            score = (
+                (1000 if exact_phrase else 0)
+                + 100 * len(matched_terms)
+                + term_occurrences
+            )
+            hit = SearchHit(
+                meta=meta,
+                turn_index=i,
+                role=turn.role,
+                snippet=_search_snippet(turn.text, matched_terms),
+            )
+            scored_hits.append((score, meta.timestamp or "", hit))
+
+    scored_hits.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return [hit for _, _, hit in scored_hits[:max_hits]]
 
 
 def get_stats(path: Path) -> ConversationStats:

@@ -29,8 +29,12 @@ agentconvos --context --json    # structured, for piping to other tools
 
 ```bash
 agentconvos --search "auth middleware"
+agentconvos --search 'auth "request id"'     # all words + an exact phrase
 agentconvos --search "auth" --source claude --json
 ```
+
+Search is case-insensitive. Separate words use AND matching across a conversation,
+quoted text stays together as an exact phrase, and the strongest matches appear first.
 
 ### List and filter
 
@@ -43,7 +47,9 @@ agentconvos --list --json | jq '.projects[].conversations[].summary'
 ### Resume and handoff
 
 ```bash
-agentconvos --resume <id>              # resume in native CLI
+agentconvos --resume                   # latest resumable session for cwd
+agentconvos --resume select            # choose a session for cwd
+agentconvos --resume <id>              # resume a specific session
 agentconvos --handoff                  # export context, start new session
 agentconvos --handoff select           # pick from list
 agentconvos --handoff codex            # latest Codex conversation
@@ -101,11 +107,16 @@ agentconvos
 
 Interactive tree grouped by agent (Claude Code, Codex, Pi, Agy) with search, multi-select, preview, export, and Gemini analysis.
 
+Search runs across full conversation text as you type. Matching terms and their
+surrounding context appear directly in the tree; press Enter to open the first
+match. Search previews center and highlight matching turns. Resume asks for
+confirmation with the agent, working directory, full session ID, and command.
+
 | Key | Action |
 |-----|--------|
-| `/` | Search/filter |
+| `/` | Focus full-text search |
 | `S` | Toggle select |
-| `R` | Resume session |
+| `R` | Review and resume session |
 | `H` | Handoff to new session |
 | `E` | Export markdown |
 | `A` | Analyze with Gemini |
