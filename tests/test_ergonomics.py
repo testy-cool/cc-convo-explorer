@@ -3,6 +3,7 @@ import io
 import os
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -28,6 +29,11 @@ def _meta(path: Path, uuid: str, timestamp: str, cwd: Path) -> ConversationMeta:
 
 
 class SearchErgonomicsTests(unittest.TestCase):
+    def test_navigation_timestamps_stay_compact(self):
+        formatter = getattr(app_module, "_fmt_nav_ts", None)
+        self.assertIsNotNone(formatter, "compact navigation timestamps are missing")
+        self.assertEqual(formatter("2026-07-18T12:23:45"), "07-18 12:23")
+
     def test_query_parser_supports_words_and_quoted_phrases(self):
         parse_terms = getattr(parser_module, "parse_search_terms", None)
         self.assertIsNotNone(parse_terms, "search query parser is missing")
@@ -299,6 +305,421 @@ class ResumeErgonomicsTests(unittest.TestCase):
 
 
 class TuiErgonomicsTests(unittest.IsolatedAsyncioTestCase):
+    async def test_status_rail_sits_above_the_footer_on_small_terminals(self):
+        class ReadyIndex:
+            def search(self, _query):
+                return {}
+
+            def sync(self, conversations, **_kwargs):
+                conversations = list(conversations)
+                return SimpleNamespace(
+                    total=len(conversations),
+                    checked=len(conversations),
+                    indexed=0,
+                    unchanged=len(conversations),
+                    removed=0,
+                    failed=0,
+                )
+
+        with patch("agentconvos.app.scan_projects", return_value=[]):
+            tui = app_module.ConvoExplorer(search_index=ReadyIndex())
+            async with tui.run_test(size=(80, 24)) as pilot:
+                await pilot.pause()
+
+                status_rail = tui.query_one("#status-rail")
+                footer = tui.query_one("Footer")
+                left_title = tui.query_one("#left-title")
+                search = tui.query_one("#filter-input", Input)
+                self.assertLess(status_rail.region.bottom, footer.region.bottom)
+                self.assertEqual(status_rail.region.bottom, footer.region.y)
+                self.assertLessEqual(left_title.region.bottom, search.region.y)
+
+    async def test_projects_render_before_background_index_completes(self):
+        class BlockingIndex:
+            def __init__(self):
+                self.started = threading.Event()
+                self.release = threading.Event()
+
+            def search(self, _query):
+                return {}
+
+            def sync(self, conversations, **_kwargs):
+                conversations = list(conversations)
+                self.started.set()
+                self.release.wait(timeout=3)
+                return SimpleNamespace(
+                    total=len(conversations),
+                    checked=len(conversations),
+                    indexed=len(conversations),
+                    unchanged=0,
+                    removed=0,
+                    failed=0,
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp)
+            path = cwd / "session.jsonl"
+            path.write_text("", encoding="utf-8")
+            meta = _meta(path, "instant-session", "2026-07-18T10:30:00", cwd)
+            project = Project("tmp", str(cwd), [meta])
+            index = BlockingIndex()
+
+            with (
+                patch("agentconvos.app.scan_projects", return_value=[project]),
+                patch("agentconvos.app.parse_jsonl") as parse_transcript,
+            ):
+                tui = app_module.ConvoExplorer(search_index=index)
+                async with tui.run_test(size=(110, 36)) as pilot:
+                    try:
+                        for _ in range(20):
+                            await pilot.pause()
+                            result_nodes = [
+                                node
+                                for node in tui._walk_tree_nodes()
+                                if node.data and node.data.kind == "convo"
+                            ]
+                            if result_nodes and index.started.is_set():
+                                break
+
+                        self.assertEqual(len(result_nodes), 1)
+                        self.assertTrue(index.started.is_set())
+                        self.assertFalse(index.release.is_set())
+                        parse_transcript.assert_not_called()
+                        index_label = str(
+                            tui.query_one("#index-status", Static).render()
+                        )
+                        self.assertIn("INDEXING", index_label)
+                    finally:
+                        index.release.set()
+
+    async def test_search_uses_persisted_snippets_without_preloading_transcripts(self):
+        class ReadyIndex:
+            def __init__(self, uuid):
+                self.uuid = uuid
+
+            def search(self, query):
+                if query == "auth middleware":
+                    return {self.uuid: "The auth middleware drops request IDs"}
+                return {}
+
+            def sync(self, conversations, **_kwargs):
+                conversations = list(conversations)
+                return SimpleNamespace(
+                    total=len(conversations),
+                    checked=len(conversations),
+                    indexed=0,
+                    unchanged=len(conversations),
+                    removed=0,
+                    failed=0,
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp)
+            path = cwd / "session.jsonl"
+            path.write_text("", encoding="utf-8")
+            meta = _meta(path, "indexed-session", "2026-07-18T10:30:00", cwd)
+            meta.preview = "Unrelated first prompt"
+            project = Project("tmp", str(cwd), [meta])
+            index = ReadyIndex(meta.uuid)
+
+            with (
+                patch("agentconvos.app.scan_projects", return_value=[project]),
+                patch("agentconvos.app.parse_jsonl") as parse_transcript,
+            ):
+                tui = app_module.ConvoExplorer(search_index=index)
+                async with tui.run_test(size=(110, 36)) as pilot:
+                    await pilot.pause()
+                    search = tui.query_one("#filter-input", Input)
+                    search.value = "auth middleware"
+                    await pilot.pause()
+
+                    result_nodes = [
+                        node
+                        for node in tui._walk_tree_nodes()
+                        if node.data and node.data.kind == "convo"
+                    ]
+                    self.assertEqual(len(result_nodes), 1)
+                    self.assertIn("drops request IDs", result_nodes[0].label.plain)
+                    parse_transcript.assert_not_called()
+
+    async def test_preview_shows_loading_state_while_transcript_parses(self):
+        class ReadyIndex:
+            def search(self, _query):
+                return {}
+
+            def sync(self, conversations, **_kwargs):
+                conversations = list(conversations)
+                return SimpleNamespace(
+                    total=len(conversations),
+                    checked=len(conversations),
+                    indexed=0,
+                    unchanged=len(conversations),
+                    removed=0,
+                    failed=0,
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp)
+            path = cwd / "session.jsonl"
+            path.write_text("", encoding="utf-8")
+            meta = _meta(path, "preview-session", "2026-07-18T10:30:00", cwd)
+            project = Project("tmp", str(cwd), [meta])
+            parse_started = threading.Event()
+            release_parse = threading.Event()
+
+            def slow_parse(_path):
+                parse_started.set()
+                release_parse.wait(timeout=3)
+                return [Turn("assistant", "Loaded preview")]
+
+            with (
+                patch("agentconvos.app.scan_projects", return_value=[project]),
+                patch("agentconvos.app.parse_jsonl", side_effect=slow_parse),
+            ):
+                tui = app_module.ConvoExplorer(search_index=ReadyIndex())
+                async with tui.run_test(size=(110, 36)) as pilot:
+                    try:
+                        await pilot.pause()
+                        tui.request_preview(meta)
+                        for _ in range(20):
+                            await pilot.pause()
+                            if parse_started.is_set():
+                                break
+
+                        preview_scroll = tui.query_one("#preview-scroll")
+                        self.assertTrue(parse_started.is_set())
+                        self.assertTrue(preview_scroll.loading)
+
+                        release_parse.set()
+                        for _ in range(20):
+                            await pilot.pause()
+                            if not preview_scroll.loading:
+                                break
+                        self.assertFalse(preview_scroll.loading)
+                    finally:
+                        release_parse.set()
+
+    async def test_cancelled_preview_cannot_overwrite_the_latest_conversation(self):
+        class ReadyIndex:
+            def search(self, _query):
+                return {}
+
+            def sync(self, conversations, **_kwargs):
+                conversations = list(conversations)
+                return SimpleNamespace(
+                    total=len(conversations),
+                    checked=len(conversations),
+                    indexed=0,
+                    unchanged=len(conversations),
+                    removed=0,
+                    failed=0,
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp)
+            first_path = cwd / "first.jsonl"
+            second_path = cwd / "second.jsonl"
+            first_path.write_text("", encoding="utf-8")
+            second_path.write_text("", encoding="utf-8")
+            first = _meta(first_path, "first-preview", "2026-07-18T10:30:00", cwd)
+            second = _meta(second_path, "second-preview", "2026-07-18T10:31:00", cwd)
+            project = Project("tmp", str(cwd), [second, first])
+            first_started = threading.Event()
+            release_first = threading.Event()
+
+            def parse_preview(path):
+                if path == first_path:
+                    first_started.set()
+                    release_first.wait(timeout=3)
+                    return [Turn("user", "First"), Turn("assistant", "First result")]
+                return [Turn("assistant", "Second result")]
+
+            with (
+                patch("agentconvos.app.scan_projects", return_value=[project]),
+                patch("agentconvos.app.parse_jsonl", side_effect=parse_preview),
+            ):
+                tui = app_module.ConvoExplorer(search_index=ReadyIndex())
+                async with tui.run_test(size=(110, 36)) as pilot:
+                    try:
+                        await pilot.pause()
+                        tui.request_preview(first)
+                        for _ in range(20):
+                            await pilot.pause()
+                            if first_started.is_set():
+                                break
+
+                        tui.request_preview(second)
+                        for _ in range(20):
+                            await pilot.pause()
+                            if "1 turns" in str(
+                                tui.query_one("#right-title", Static).render()
+                            ):
+                                break
+
+                        release_first.set()
+                        for _ in range(20):
+                            await pilot.pause()
+
+                        title = str(tui.query_one("#right-title", Static).render())
+                        self.assertEqual(title, "CONVERSATION · 1 turns")
+                    finally:
+                        release_first.set()
+
+    async def test_active_search_refreshes_as_background_index_makes_progress(self):
+        class ProgressiveIndex:
+            def __init__(self, uuid):
+                self.uuid = uuid
+                self.indexed = False
+                self.started = threading.Event()
+                self.advance = threading.Event()
+                self.progress_sent = threading.Event()
+                self.finish = threading.Event()
+
+            def search(self, query):
+                if self.indexed and query == "auth middleware":
+                    return {self.uuid: "auth middleware indexed in the background"}
+                return {}
+
+            def sync(self, conversations, on_progress, **_kwargs):
+                conversations = list(conversations)
+                self.started.set()
+                self.advance.wait(timeout=3)
+                self.indexed = True
+                progress = SimpleNamespace(
+                    total=2,
+                    checked=1,
+                    indexed=1,
+                    unchanged=0,
+                    removed=0,
+                    failed=0,
+                )
+                on_progress(progress)
+                self.progress_sent.set()
+                self.finish.wait(timeout=3)
+                return SimpleNamespace(
+                    total=2,
+                    checked=2,
+                    indexed=2,
+                    unchanged=0,
+                    removed=0,
+                    failed=0,
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp)
+            path = cwd / "session.jsonl"
+            path.write_text("", encoding="utf-8")
+            meta = _meta(path, "progress-session", "2026-07-18T10:30:00", cwd)
+            meta.preview = "Unrelated prompt"
+            project = Project("tmp", str(cwd), [meta])
+            index = ProgressiveIndex(meta.uuid)
+
+            with patch("agentconvos.app.scan_projects", return_value=[project]):
+                tui = app_module.ConvoExplorer(search_index=index)
+                async with tui.run_test(size=(110, 36)) as pilot:
+                    try:
+                        for _ in range(20):
+                            await pilot.pause()
+                            if index.started.is_set():
+                                break
+                        search = tui.query_one("#filter-input", Input)
+                        search.value = "auth middleware"
+                        await pilot.pause()
+                        self.assertFalse(
+                            any(
+                                node.data and node.data.kind == "convo"
+                                for node in tui._walk_tree_nodes()
+                            )
+                        )
+
+                        index.advance.set()
+                        for _ in range(30):
+                            await pilot.pause()
+                            result_nodes = [
+                                node
+                                for node in tui._walk_tree_nodes()
+                                if node.data and node.data.kind == "convo"
+                            ]
+                            if index.progress_sent.is_set() and result_nodes:
+                                break
+
+                        self.assertTrue(index.progress_sent.is_set())
+                        self.assertEqual(len(result_nodes), 1)
+                        self.assertFalse(index.finish.is_set())
+                        search_title = str(
+                            tui.query_one("#right-title", Static).render()
+                        )
+                        self.assertEqual(search_title, "SEARCH · 1")
+                    finally:
+                        index.advance.set()
+                        index.finish.set()
+
+    async def test_index_progress_does_not_replace_an_open_search_preview(self):
+        class ReadyIndex:
+            def __init__(self, uuid):
+                self.uuid = uuid
+
+            def search(self, query):
+                return (
+                    {self.uuid: "auth middleware indexed in the background"}
+                    if query == "auth middleware"
+                    else {}
+                )
+
+            def sync(self, conversations, **_kwargs):
+                conversations = list(conversations)
+                return SimpleNamespace(
+                    total=len(conversations),
+                    checked=len(conversations),
+                    indexed=0,
+                    unchanged=len(conversations),
+                    removed=0,
+                    failed=0,
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp)
+            path = cwd / "session.jsonl"
+            path.write_text("", encoding="utf-8")
+            meta = _meta(path, "stable-preview", "2026-07-18T10:30:00", cwd)
+            project = Project("tmp", str(cwd), [meta])
+            turns = [
+                Turn("user", "Inspect the auth middleware"),
+                Turn("assistant", "The auth middleware is ready"),
+            ]
+
+            with (
+                patch("agentconvos.app.scan_projects", return_value=[project]),
+                patch("agentconvos.app.parse_jsonl", return_value=turns),
+            ):
+                tui = app_module.ConvoExplorer(search_index=ReadyIndex(meta.uuid))
+                async with tui.run_test(size=(110, 36)) as pilot:
+                    await pilot.pause()
+                    search = tui.query_one("#filter-input", Input)
+                    search.value = "auth middleware"
+                    await pilot.press("enter")
+                    for _ in range(20):
+                        await pilot.pause()
+                        if "MATCHES" in str(
+                            tui.query_one("#right-title", Static).render()
+                        ):
+                            break
+
+                    tui._indexing = True
+                    tui._set_index_progress(
+                        SimpleNamespace(
+                            total=2,
+                            checked=1,
+                            indexed=1,
+                            unchanged=0,
+                            removed=0,
+                            failed=0,
+                        )
+                    )
+
+                    title = str(tui.query_one("#right-title", Static).render())
+                    self.assertEqual(title, "MATCHES (2 turns) · R RESUME")
+
     async def test_search_enter_opens_first_match_with_highlighted_context(self):
         with tempfile.TemporaryDirectory() as tmp:
             cwd = Path(tmp)
@@ -310,12 +731,16 @@ class TuiErgonomicsTests(unittest.IsolatedAsyncioTestCase):
                 Turn("user", "Please inspect the auth middleware failure."),
                 Turn("assistant", "The auth middleware drops the request id."),
             ]
+            from agentconvos.search_index import ConversationSearchIndex
+
+            index = ConversationSearchIndex(cwd / "search.sqlite3")
+            index.sync([meta], parse_conversation=lambda _path: turns)
 
             with (
                 patch("agentconvos.app.scan_projects", return_value=[project]),
                 patch("agentconvos.app.parse_jsonl", return_value=turns),
             ):
-                tui = app_module.ConvoExplorer()
+                tui = app_module.ConvoExplorer(search_index=index)
                 async with tui.run_test(size=(110, 36)) as pilot:
                     await pilot.pause()
                     search = tui.query_one("#filter-input", Input)
@@ -350,7 +775,11 @@ class TuiErgonomicsTests(unittest.IsolatedAsyncioTestCase):
                 patch("agentconvos.app.scan_projects", return_value=[project]),
                 patch("agentconvos.app.parse_jsonl", return_value=[Turn("user", "auth")]),
             ):
-                tui = app_module.ConvoExplorer()
+                from agentconvos.search_index import ConversationSearchIndex
+
+                tui = app_module.ConvoExplorer(
+                    search_index=ConversationSearchIndex(cwd / "search.sqlite3")
+                )
                 async with tui.run_test(size=(100, 32)) as pilot:
                     await pilot.pause()
                     search = tui.query_one("#filter-input", Input)
@@ -378,7 +807,11 @@ class TuiErgonomicsTests(unittest.IsolatedAsyncioTestCase):
                     return_value=[Turn("user", "searchable conversation")],
                 ),
             ):
-                tui = app_module.ConvoExplorer()
+                from agentconvos.search_index import ConversationSearchIndex
+
+                tui = app_module.ConvoExplorer(
+                    search_index=ConversationSearchIndex(cwd / "search.sqlite3")
+                )
                 async with tui.run_test(size=(100, 32)) as pilot:
                     await pilot.pause()
                     tui.current_meta = meta

@@ -15,6 +15,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
+from textual.worker import get_current_worker
 from textual.widgets import (
     Button,
     Footer,
@@ -28,6 +29,7 @@ from textual.widgets import (
 from textual.widgets.tree import TreeNode
 
 from .scanner import Project, scan_projects
+from .search_index import ConversationSearchIndex, IndexSyncStats
 
 
 _SOURCE_STYLE = {
@@ -97,6 +99,12 @@ def _fmt_ts(ts: str, date_only: bool = False) -> str:
     if date_only or len(ts) < 16:
         return ts[:10]
     return ts[:16].replace("T", " ")
+
+
+def _fmt_nav_ts(ts: str) -> str:
+    """Format an ISO timestamp for a narrow navigation row."""
+    formatted = _fmt_ts(ts)
+    return formatted[5:] if len(formatted) >= 16 else formatted
 
 
 def _export_stem(meta: ConversationMeta) -> str:
@@ -328,27 +336,91 @@ class NodeData:
 
 class ConvoExplorer(App):
     CSS = """
-    #main { height: 1fr; }
-    #sidebar { width: 40%; min-width: 30; max-width: 90; }
+    Screen {
+        background: #091017;
+        color: #d6e1ea;
+    }
+    Header {
+        background: #0f1821;
+        color: #e8f0f6;
+    }
+    Footer {
+        background: #0d151d;
+        color: #8da0b1;
+    }
+    #main { height: 1fr; background: #091017; }
+    #sidebar {
+        width: 42%;
+        min-width: 34;
+        max-width: 80;
+        background: #0c141c;
+        border-right: solid #22313f;
+    }
     #resize-handle {
         width: 1;
         height: 1fr;
-        background: $surface-lighten-2;
-        color: $text-muted;
+        background: #16232e;
+        color: #426275;
     }
-    #resize-handle:hover { background: $accent; }
-    #content { width: 1fr; }
-    #filter-input { dock: top; }
-    #filter-input:focus { border: tall $accent; }
-    #nav-tree { height: 1fr; }
-    #preview-scroll { height: 1fr; }
-    #preview { padding: 1 2; }
-    #status-bar { dock: bottom; height: 1; background: $accent; color: $text; padding: 0 1; }
-    .panel-title { dock: top; height: 1; background: $boost; padding: 0 1; text-style: bold; }
+    #resize-handle:hover { background: #2dd4bf; color: #081014; }
+    #content { width: 1fr; background: #091017; }
+    #filter-input {
+        height: 3;
+        margin: 1 1 0 1;
+        padding: 0 1;
+        border: tall #2a3a48;
+        background: #111b25;
+        color: #e7eef4;
+    }
+    #filter-input:hover { border: tall #456276; }
+    #filter-input:focus {
+        border: tall #2dd4bf;
+        background: #10232a;
+    }
+    #filter-input > .input--placeholder { color: #71889a; }
+    #nav-tree {
+        height: 1fr;
+        padding: 1 1;
+        background: #0c141c;
+        scrollbar-color: #385467;
+        scrollbar-color-hover: #2dd4bf;
+        scrollbar-color-active: #5eead4;
+    }
+    #nav-tree:focus { background: #0e1822; }
+    #preview-scroll {
+        height: 1fr;
+        background: #091017;
+        scrollbar-color: #385467;
+        scrollbar-color-hover: #2dd4bf;
+        scrollbar-color-active: #5eead4;
+    }
+    #preview { padding: 1 3 3 3; color: #d6e1ea; }
+    #status-rail {
+        height: 1;
+        background: #0d151d;
+    }
+    #status-bar { width: 1fr; height: 1; color: #91a3b2; padding: 0 1; }
+    #index-status {
+        width: auto;
+        height: 1;
+        min-width: 22;
+        content-align: right middle;
+        background: #101c25;
+        padding: 0 1;
+    }
+    .panel-title {
+        height: 2;
+        content-align: left middle;
+        background: #0f1923;
+        color: #91a7b8;
+        border-bottom: solid #1d2b37;
+        padding: 0 2;
+        text-style: bold;
+    }
     Tree { scrollbar-size: 1 1; }
     #prompt-editor { height: 1fr; }
     #prompt-panel { height: 1fr; }
-    #prompt-bar { dock: bottom; height: 3; }
+    #prompt-bar { dock: bottom; height: 3; background: #101923; }
     #prompt-bar Button { width: 1fr; margin: 0 1; }
     """
 
@@ -371,8 +443,13 @@ class ConvoExplorer(App):
     ]
 
     TITLE = "agentconvos"
+    SUB_TITLE = "conversation search cockpit"
 
-    def __init__(self, extra_dirs: list[Path] | None = None) -> None:
+    def __init__(
+        self,
+        extra_dirs: list[Path] | None = None,
+        search_index: ConversationSearchIndex | None = None,
+    ) -> None:
         super().__init__()
         self.projects: list[Project] = []
         self._extra_dirs = extra_dirs
@@ -387,28 +464,46 @@ class ConvoExplorer(App):
         self._last_action: str = ""  # "analysis" or "export"
         self._resume_meta: ConversationMeta | None = None  # set when user wants to resume
         self._handoff_meta: ConversationMeta | None = None  # set when user wants to handoff
-        self._search_cache: dict[str, str] = {}  # uuid -> original conversation text
-        self._search_index: dict[str, str] = {}  # uuid -> case-folded conversation text
+        self._conversation_index = search_index or ConversationSearchIndex()
+        self._indexing = False
+        self._index_progress = IndexSyncStats(total=0)
+        self._summaries: dict[str, str] = {}
+        self._analyzed_set: set[str] = set()
 
     def compose(self) -> ComposeResult:
         yield Header()
         with Horizontal(id="main"):
             with Vertical(id="sidebar"):
-                yield Input(placeholder="Search all conversation text…  Enter opens first match", id="filter-input")
-                yield Static("PROJECTS", classes="panel-title", id="left-title")
+                yield Static("HISTORY", classes="panel-title", id="left-title")
+                yield Input(
+                    placeholder="Search conversations…",
+                    id="filter-input",
+                )
                 yield Tree("Conversations", id="nav-tree")
-            yield Static("┃", id="resize-handle")
+            yield Static("│", id="resize-handle")
             with Vertical(id="content"):
-                yield Static("PREVIEW", classes="panel-title", id="right-title")
+                yield Static("CONVERSATION", classes="panel-title", id="right-title")
                 with VerticalScroll(id="preview-scroll"):
-                    yield Markdown("*Select a project, then a conversation*", id="preview")
+                    yield Markdown(
+                        """# Pick up the thread
+
+Type to find a session by title, prompt, path, branch, or transcript text.
+
+Enter opens the first result. R resumes it. S marks sessions for bulk actions.
+
+History appears immediately. Full-text results arrive live while indexing runs in the background.
+""",
+                        id="preview",
+                    )
                 with Vertical(id="prompt-panel"):
                     yield TextArea(id="prompt-editor", language="markdown")
                     with Horizontal(id="prompt-bar"):
                         yield Button("Save & Close", id="prompt-save", variant="primary")
                         yield Button("Switch Single/Multi", id="prompt-switch", variant="default")
                         yield Button("Reset Default", id="prompt-reset", variant="warning")
-        yield Static("Loading...", id="status-bar")
+        with Horizontal(id="status-rail"):
+            yield Static("Discovering conversation history…", id="status-bar")
+            yield Static("INDEX · STARTING", id="index-status")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -416,10 +511,11 @@ class ConvoExplorer(App):
         tree = self.query_one("#nav-tree", Tree)
         tree.show_root = False
         tree.guide_depth = 3
-        self.query_one("#status-bar", Static).update(" Scanning conversations...")
-        self.query_one("#left-title", Static).update(" PROJECTS (loading...)")
+        tree.loading = True
+        self.query_one("#status-bar", Static).update(" Discovering conversation history…")
+        self.query_one("#left-title", Static).update(" HISTORY · loading")
         self.load_projects()
-        tree.focus()
+        self.query_one("#filter-input", Input).focus()
 
     # --- Resize handle ---
 
@@ -442,20 +538,86 @@ class ConvoExplorer(App):
     @work(thread=True)
     def load_projects(self) -> None:
         projects = scan_projects(extra_dirs=self._extra_dirs)
-        # Build search cache once so live search can show real match context.
-        cache = {}
-        index = {}
-        for p in projects:
-            for c in p.conversations:
-                try:
-                    turns = parse_jsonl(c.path)
-                    cache[c.uuid] = "\n".join(t.text for t in turns)
-                except Exception:
-                    cache[c.uuid] = ""
-                index[c.uuid] = cache[c.uuid].casefold()
-        self._search_cache = cache
-        self._search_index = index
-        self.call_from_thread(self._populate_tree, projects)
+        self.call_from_thread(self._projects_loaded, projects)
+
+    def _projects_loaded(self, projects: list[Project]) -> None:
+        self.query_one("#nav-tree", Tree).loading = False
+        try:
+            from .summarize import load_summaries
+
+            self._summaries = load_summaries()
+        except Exception:
+            self._summaries = {}
+        self._analyzed_set = self._get_analyzed_set()
+        self._populate_tree(projects)
+        conversations = [
+            conversation
+            for project in projects
+            for conversation in project.conversations
+        ]
+        self._indexing = True
+        self._set_index_progress(IndexSyncStats(total=len(conversations)))
+        self.build_search_index(conversations)
+
+    @work(thread=True, exclusive=True, group="search-index")
+    def build_search_index(self, conversations: list[ConversationMeta]) -> None:
+        worker = get_current_worker()
+        last_reported = -10
+
+        def report(progress: IndexSyncStats) -> None:
+            nonlocal last_reported
+            if worker.is_cancelled:
+                return
+            if progress.checked == progress.total or progress.checked - last_reported >= 10:
+                last_reported = progress.checked
+                self.call_from_thread(self._set_index_progress, progress)
+
+        try:
+            result = self._conversation_index.sync(
+                conversations,
+                on_progress=report,
+                should_cancel=lambda: worker.is_cancelled,
+            )
+        except Exception as error:
+            if not worker.is_cancelled:
+                self.call_from_thread(self._index_failed, str(error))
+            return
+        if not worker.is_cancelled:
+            self.call_from_thread(self._index_finished, result)
+
+    def _set_index_progress(self, progress: IndexSyncStats) -> None:
+        self._index_progress = progress
+        label = Text("INDEXING ", style="bold #f0b35a")
+        label.append(f"{progress.checked}/{progress.total}", style="#d8c39b")
+        self.query_one("#index-status", Static).update(label)
+        search_input = self.query_one("#filter-input", Input)
+        query = search_input.value.strip()
+        if query and progress.checked:
+            self._populate_tree(self.projects, filter_text=query)
+            if search_input.has_focus or self.current_meta is None:
+                self._show_search_summary(query)
+
+    def _index_finished(self, progress: IndexSyncStats) -> None:
+        self._indexing = False
+        self._index_progress = progress
+        label = Text("INDEX READY ", style="bold #55d6a9")
+        label.append(f"{progress.total}", style="#a7e8d2")
+        if progress.failed:
+            label.append(f" · {progress.failed} skipped", style="#f0b35a")
+        self.query_one("#index-status", Static).update(label)
+        search_input = self.query_one("#filter-input", Input)
+        query = search_input.value.strip()
+        if query:
+            self._populate_tree(self.projects, filter_text=query)
+            if search_input.has_focus or self.current_meta is None:
+                self._show_search_summary(query)
+
+    def _index_failed(self, message: str) -> None:
+        self._indexing = False
+        self.query_one("#index-status", Static).update(
+            Text("INDEX UNAVAILABLE", style="bold #ff7b72")
+        )
+        self.notify(f"Search index failed: {message}", severity="warning")
 
     def _get_analyzed_set(self) -> set[str]:
         """Scan analyses dir for previously analyzed project/convo names."""
@@ -469,9 +631,8 @@ class ConvoExplorer(App):
 
     def _is_analyzed(self, name: str) -> bool:
         """Check if any analysis file contains this name."""
-        analyzed = self._get_analyzed_set()
         name_lower = name.lower().replace("\\", " ").replace("/", " ").replace("-", " ")
-        return any(name_lower in a.replace("-", " ") for a in analyzed)
+        return any(name_lower in a.replace("-", " ") for a in self._analyzed_set)
 
     def _populate_tree(self, projects: list, filter_text: str = "") -> None:
         self.projects = projects
@@ -479,13 +640,14 @@ class ConvoExplorer(App):
         tree.clear()
         tree.root.data = None
         terms = parse_search_terms(filter_text)
+        indexed_matches: dict[str, str] = {}
+        if terms:
+            try:
+                indexed_matches = self._conversation_index.search(filter_text)
+            except Exception:
+                indexed_matches = {}
 
-        summaries = {}
-        try:
-            from .summarize import load_summaries
-            summaries = load_summaries()
-        except Exception:
-            pass
+        summaries = self._summaries
 
         cwd = os.getcwd()
 
@@ -498,7 +660,6 @@ class ConvoExplorer(App):
             if terms:
                 matches = []
                 for c in convos:
-                    content = self._search_index.get(c.uuid, "")
                     metadata = "\n".join(
                         (
                             c.slug or "",
@@ -508,7 +669,7 @@ class ConvoExplorer(App):
                             proj.display_path,
                         )
                     ).casefold()
-                    if all(term in content or term in metadata for term in terms):
+                    if c.uuid in indexed_matches or all(term in metadata for term in terms):
                         matches.append(c)
                 convos = matches
             if not convos:
@@ -522,7 +683,7 @@ class ConvoExplorer(App):
             filtered_count += len(convos)
 
         self.query_one("#left-title", Static).update(
-            f" {'SEARCH RESULTS' if terms else 'PROJECTS'} ({filtered_count})"
+            f" {'RESULTS' if terms else 'HISTORY'} · {filtered_count}"
         )
 
         # Find which source/group contains the cwd project
@@ -600,7 +761,7 @@ class ConvoExplorer(App):
                 for rel_label, proj, convos in sorted(items, key=_proj_sort_key):
                     project_path = _project_real_path(proj, convos)
                     is_cwd = _is_current_project(cwd, project_path)
-                    date_str = _fmt_ts(convos[0].timestamp) if convos else ""
+                    date_str = _fmt_nav_ts(convos[0].timestamp) if convos else ""
                     count = len(convos)
                     total_projects += 1
 
@@ -620,31 +781,31 @@ class ConvoExplorer(App):
                     )
 
                     for c in convos:
-                        d = _fmt_ts(c.timestamp)
-                        slug = c.slug or c.uuid[:8]
+                        d = _fmt_nav_ts(c.timestamp)
                         summary = summaries.get(c.uuid, "")
-                        content = self._search_cache.get(c.uuid, "") or ""
-                        folded_content = self._search_index.get(c.uuid, "")
-                        if terms and any(term in folded_content for term in terms):
-                            preview = _matching_excerpt(content, terms, width=64)
-                        elif summary:
-                            preview = summary[:60]
+                        indexed_snippet = indexed_matches.get(c.uuid, "")
+                        if terms and indexed_snippet:
+                            preview = _matching_excerpt(indexed_snippet, terms, width=64)
                         else:
-                            preview = (c.preview or "")[:45]
-                        label = f"  {d}  {slug}  {preview}"
+                            preview = summary or c.preview or c.slug or c.uuid[:8]
+                        label = f"  {d}  {preview[:72]}"
                         pnode.add_leaf(
                             _highlight_matches(label, terms),
                             data=NodeData(kind="convo", meta=c, project=proj),
                         )
 
         if terms:
-            status = f" {filtered_count} matches · Enter open first · R resume · Esc clear search"
+            status = f" {filtered_count} matches · ↑↓ scan · Enter open · R resume · Esc clear"
         else:
-            status = f" {total_projects} projects · {filtered_count} conversations · / search · S select · Tab switch · A analyze · E export"
+            status = (
+                f" {filtered_count} convos · {total_projects} projects · "
+                "type to search · Tab browse"
+            )
         self.query_one("#status-bar", Static).update(status)
 
     def _refresh_analyzed_markers(self) -> None:
         """Re-scan analyses dir and update ★ markers on project nodes."""
+        self._analyzed_set = self._get_analyzed_set()
         for pnode in self._walk_tree_nodes():
             data: NodeData = pnode.data
             if not data or data.kind != "project" or not data.project:
@@ -678,11 +839,31 @@ class ConvoExplorer(App):
         if data.kind == "convo" and data.meta:
             self.current_meta = data.meta
             query = self.query_one("#filter-input", Input).value.strip()
-            self.load_preview(data.meta, query)
+            self.request_preview(data.meta, query)
 
-    @work(thread=True)
+    def request_preview(self, meta: ConversationMeta, query: str = "") -> None:
+        preview_scroll = self.query_one("#preview-scroll", VerticalScroll)
+        preview_scroll.loading = True
+        name = meta.slug or meta.uuid[:8]
+        self.query_one("#right-title", Static).update(f"LOADING · {name}")
+        self.load_preview(meta, query)
+
+    @work(thread=True, exclusive=True, group="preview")
     def load_preview(self, meta: ConversationMeta, query: str = "") -> None:
-        turns = parse_jsonl(meta.path)
+        worker = get_current_worker()
+        try:
+            turns = parse_jsonl(meta.path)
+        except Exception as error:
+            if not worker.is_cancelled:
+                self.call_from_thread(
+                    self._set_preview,
+                    f"## Preview unavailable\n\n`{_escape_markdown_inline(str(error))}`",
+                    0,
+                    "PREVIEW ERROR",
+                )
+            return
+        if worker.is_cancelled:
+            return
         meta.turn_count = len(turns)
         terms = parse_search_terms(query)
 
@@ -724,12 +905,13 @@ class ConvoExplorer(App):
                     lines.append(f"> {highlighted}\n")
                 if len(matches) > len(visible):
                     lines.append(f"*Showing the best {len(visible)} of {len(matches)} matching turns.*")
-                self.call_from_thread(
-                    self._set_preview,
-                    "\n".join(lines),
-                    len(matches),
-                    f"MATCHES ({len(matches)} turns) · R RESUME",
-                )
+                if not worker.is_cancelled:
+                    self.call_from_thread(
+                        self._set_preview,
+                        "\n".join(lines),
+                        len(matches),
+                        f"MATCHES ({len(matches)} turns) · R RESUME",
+                    )
                 return
 
         # Show last 10 turns for quick preview
@@ -742,13 +924,55 @@ class ConvoExplorer(App):
         if skipped:
             header += f" (showing last {len(tail)})"
         header += "\n\n---\n\n"
-        self.call_from_thread(self._set_preview, header + md, len(turns))
+        if not worker.is_cancelled:
+            self.call_from_thread(self._set_preview, header + md, len(turns))
 
     def _set_preview(self, md: str, turn_count: int, title: str | None = None) -> None:
         self.query_one("#preview", Markdown).update(md)
-        label = title or (f"PREVIEW ({turn_count} turns)" if turn_count else "PREVIEW")
+        label = title or (
+            f"CONVERSATION · {turn_count} turns" if turn_count else "CONVERSATION"
+        )
         self.query_one("#right-title", Static).update(label)
-        self.query_one("#preview-scroll", VerticalScroll).scroll_home()
+        preview_scroll = self.query_one("#preview-scroll", VerticalScroll)
+        preview_scroll.loading = False
+        preview_scroll.scroll_home()
+
+    def _show_search_summary(self, query: str) -> None:
+        result_nodes = [
+            node
+            for node in self._walk_tree_nodes()
+            if node.data and node.data.kind == "convo"
+        ]
+        count = len(result_nodes)
+        escaped_query = _escape_markdown_inline(query)
+        if self._indexing:
+            progress = self._index_progress
+            index_note = (
+                f"\n\n*Full-text index: {progress.checked}/{progress.total}. "
+                "Results update live.*"
+            )
+        else:
+            index_note = ""
+
+        if count:
+            noun = "conversation" if count == 1 else "conversations"
+            body = (
+                f'## {count} {noun}\n\n`{escaped_query}`\n\n'
+                "Use **↑/↓** to scan, **Enter** to open, then **R** to resume."
+                f"{index_note}"
+            )
+        elif self._indexing:
+            body = (
+                f'## No matches yet\n\n`{escaped_query}`\n\n'
+                "Metadata is searchable now. Transcript results will appear as "
+                f"the background index advances.{index_note}"
+            )
+        else:
+            body = (
+                f'## No matches\n\n`{escaped_query}`\n\n'
+                "Try fewer words, a path fragment, or an exact phrase in quotes."
+            )
+        self._set_preview(body, 0, f"SEARCH · {count}")
 
     # --- Filter ---
 
@@ -756,31 +980,10 @@ class ConvoExplorer(App):
         if event.input.id == "filter-input":
             query = event.value.strip()
             self._populate_tree(self.projects, filter_text=query)
-            tree = self.query_one("#nav-tree", Tree)
-            all_convos = [
-                cnode for cnode in self._walk_tree_nodes(tree.root)
-                if cnode.data and cnode.data.kind == "convo"
-            ]
             if query:
-                count = len(all_convos)
-                if count:
-                    noun = "conversation" if count == 1 else "conversations"
-                    self._set_preview(
-                        f'## {count} {noun} match “{_escape_markdown_inline(query)}”\n\n'
-                        "Press **Enter** to open the first result, then **R** to resume it.\n\n"
-                        "Matching words are highlighted in the tree with their surrounding context.",
-                        0,
-                        f"SEARCH ({count})",
-                    )
-                else:
-                    self._set_preview(
-                        f'## No matches for “{_escape_markdown_inline(query)}”\n\n'
-                        "Try fewer words, or put an exact phrase in quotes.",
-                        0,
-                        "SEARCH (0)",
-                    )
+                self._show_search_summary(query)
             elif self.current_meta:
-                self.load_preview(self.current_meta)
+                self.request_preview(self.current_meta)
 
     # --- Multi-select ---
 
@@ -932,7 +1135,7 @@ class ConvoExplorer(App):
             self._save_current_prompt()
             self.query_one("#prompt-panel").display = False
             self.query_one("#preview-scroll").display = True
-            self.query_one("#right-title", Static).update("PREVIEW")
+            self.query_one("#right-title", Static).update("CONVERSATION")
             self.notify("Prompt saved")
         elif event.button.id == "prompt-switch":
             self._save_current_prompt()
@@ -1099,7 +1302,7 @@ class ConvoExplorer(App):
             if not worker.is_finished:
                 worker.cancel()
         self._analyzing = False
-        self.query_one("#right-title", Static).update("PREVIEW")
+        self.query_one("#right-title", Static).update("CONVERSATION")
         self._set_preview("*Analysis cancelled.*", 0)
         self.notify("Analysis cancelled")
 
@@ -1244,7 +1447,7 @@ class ConvoExplorer(App):
             tree.focus()
             if first_match.data.meta:
                 self.current_meta = first_match.data.meta
-                self.load_preview(first_match.data.meta, event.value.strip())
+                self.request_preview(first_match.data.meta, event.value.strip())
 
     def action_cancel(self) -> None:
         if self._analyzing:
