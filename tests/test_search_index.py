@@ -76,6 +76,30 @@ class ConversationSearchIndexTests(unittest.TestCase):
         self.assertNotIn(first.uuid, first_matches)
         self.assertIn(second.uuid, second_matches)
 
+    def test_search_keeps_all_matches_without_rendering_every_snippet(self):
+        from agentconvos.search_index import ConversationSearchIndex
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first_path = root / "first.jsonl"
+            second_path = root / "second.jsonl"
+            first_path.write_text("first", encoding="utf-8")
+            second_path.write_text("second", encoding="utf-8")
+            first = _meta(first_path, "first-session")
+            second = _meta(second_path, "second-session")
+            index = ConversationSearchIndex(root / "search.sqlite3")
+            index.sync(
+                [first, second],
+                parse_conversation=lambda path: [
+                    Turn("user", f"shared searchable text from {path.stem}")
+                ],
+            )
+
+            matches = index.search("shared searchable", snippet_limit=1)
+
+        self.assertEqual(set(matches), {first.uuid, second.uuid})
+        self.assertEqual(sum(bool(snippet) for snippet in matches.values()), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

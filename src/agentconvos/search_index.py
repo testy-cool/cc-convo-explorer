@@ -191,25 +191,50 @@ class ConversationSearchIndex:
                 expressions.append(f'"{" ".join(escaped)}"')
         return " AND ".join(expressions)
 
-    def search(self, query: str, limit: int = 5000) -> dict[str, str]:
+    def search(
+        self,
+        query: str,
+        limit: int = 5000,
+        snippet_limit: int = 20,
+    ) -> dict[str, str]:
         expression = self._match_expression(query)
         if not expression or not self.path.exists():
             return {}
 
-        connection = self._connect()
+        connection = sqlite3.connect(
+            f"file:{self.path}?mode=ro",
+            uri=True,
+            timeout=0.1,
+        )
         try:
-            rows = connection.execute(
+            matches = {
+                uuid: ""
+                for (uuid,) in connection.execute(
+                    """
+                    SELECT uuid
+                    FROM search_documents_fts
+                    WHERE search_documents_fts MATCH ?
+                    LIMIT ?
+                    """,
+                    (expression, limit),
+                )
+            }
+            if not matches or snippet_limit <= 0:
+                return matches
+
+            snippet_rows = connection.execute(
                 """
                 SELECT uuid,
                        snippet(search_documents_fts, 3, '', '', ' … ', 18)
                 FROM search_documents_fts
-                WHERE search_documents_fts MATCH ?
-                ORDER BY bm25(search_documents_fts)
+                WHERE content MATCH ?
                 LIMIT ?
                 """,
-                (expression, limit),
+                (expression, min(limit, snippet_limit)),
             )
-            return {uuid: snippet or "" for uuid, snippet in rows}
+            for uuid, snippet in snippet_rows:
+                matches[uuid] = snippet or ""
+            return matches
         except sqlite3.Error:
             return {}
         finally:
