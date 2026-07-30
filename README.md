@@ -79,7 +79,12 @@ agentconvos --handoff --yolo           # hand off latest conversation to the sam
 agentconvos --concat <id>              # markdown export
 agentconvos --concat <id> --detail tools    # include tool call summaries
 agentconvos --concat <id> --detail full     # include everything
+agentconvos --turns <id> --json        # normalized user/assistant turns on stdout
 ```
+
+`--turns` defaults to `--detail text`, which excludes tool calls, tool results,
+reasoning blocks, and agent-injected bootstrap/command metadata. Use
+`--detail tools`, `results`, `thinking`, or `full` for a targeted deeper export.
 
 ### Analyze with Gemini
 
@@ -93,7 +98,9 @@ agentconvos --analyze <id> --prompt "What tools were used most?"
 
 ### JSON output
 
-`--json` works with `--list`, `--search`, `--last`, and `--context`. Output includes session summaries, token estimates, file paths, and UUIDs.
+`--json` works with `--list`, `--search`, `--last`, `--context`, and `--turns`.
+Transcript output includes normalized indexed turns plus source, path, UUID, cwd,
+size, and modification metadata.
 
 ## Library API
 

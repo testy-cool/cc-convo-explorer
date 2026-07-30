@@ -195,12 +195,26 @@ def _codex_timestamp_from_rollout_stem(stem: str) -> str:
 def _is_codex_context_block(text: str) -> bool:
     stripped = text.strip()
     return stripped.startswith((
+        "# AGENTS.md instructions for ",
         "<environment_context>",
         "<permissions instructions>",
         "<collaboration_mode>",
         "<apps_instructions>",
         "<skills_instructions>",
         "<plugins_instructions>",
+    ))
+
+
+def _is_claude_context_block(text: str) -> bool:
+    stripped = text.strip()
+    return stripped == "[Request interrupted by user]" or stripped.startswith((
+        "<local-command-",
+        "<command-name>",
+        "<command-message>",
+        "<command-args>",
+        "<system-reminder>",
+        "<ide_opened_file>",
+        "<ide_selection>",
     ))
 
 
@@ -574,16 +588,25 @@ def _parse_jsonl_claude(path: Path, detail: str = DETAIL_TEXT) -> list[Turn]:
             msg_type = rec.get("type")
 
             if msg_type == "user":
+                if rec.get("isMeta"):
+                    continue
                 content = rec.get("message", {}).get("content", "")
                 if isinstance(content, list):
                     text_parts = []
                     for block in content:
                         if isinstance(block, dict) and block.get("type") == "text":
-                            text_parts.append(block.get("text", ""))
+                            block_text = block.get("text", "")
+                            if not _is_claude_context_block(block_text):
+                                text_parts.append(block_text)
                     text = "\n".join(text_parts).strip()
                     if text and len(text) >= 3:
                         turns.append(Turn(role="user", text=text))
-                elif isinstance(content, str) and content.strip() and len(content.strip()) >= 3:
+                elif (
+                    isinstance(content, str)
+                    and content.strip()
+                    and len(content.strip()) >= 3
+                    and not _is_claude_context_block(content)
+                ):
                     turns.append(Turn(role="user", text=content.strip()))
 
             elif msg_type == "assistant":

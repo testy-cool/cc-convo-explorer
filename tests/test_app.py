@@ -79,6 +79,61 @@ def _write_agy_history(home: Path, conversation_id: str, workspace: Path) -> Non
 
 
 class CodexParserTests(unittest.TestCase):
+    def test_text_parser_excludes_injected_project_instructions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "rollout-session.jsonl"
+            records = [
+                {
+                    "type": "session_meta",
+                    "payload": {
+                        "id": "session-id",
+                        "timestamp": "2026-07-30T10:30:00Z",
+                        "cwd": str(path.parent),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_text",
+                                "text": "# AGENTS.md instructions for /tmp/project\n\n<INSTRUCTIONS>bootstrap</INSTRUCTIONS>",
+                            }
+                        ],
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "user_message",
+                        "message": "What changed in the release?",
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "agent_message",
+                        "message": "The release changed the retry behavior.",
+                    },
+                },
+            ]
+            path.write_text(
+                "\n".join(json.dumps(record) for record in records),
+                encoding="utf-8",
+            )
+
+            turns = parse_jsonl(path)
+
+        self.assertEqual(
+            [(turn.role, turn.text) for turn in turns],
+            [
+                ("user", "What changed in the release?"),
+                ("assistant", "The release changed the retry behavior."),
+            ],
+        )
+
     def test_subagent_metadata_keeps_its_own_first_session_id(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "rollout-child-session.jsonl"
@@ -166,6 +221,69 @@ class CodexParserTests(unittest.TestCase):
 
         self.assertEqual(len(turns), 40)
         self.assertLessEqual(TrackedRecord.peak, 3)
+
+
+class ClaudeParserTests(unittest.TestCase):
+    def test_text_parser_excludes_local_command_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "claude-session.jsonl"
+            records = [
+                {
+                    "type": "user",
+                    "message": {
+                        "role": "user",
+                        "content": "Please inspect the retry behavior.",
+                    },
+                },
+                {
+                    "type": "user",
+                    "isMeta": True,
+                    "message": {
+                        "role": "user",
+                        "content": "<local-command-caveat>generated locally</local-command-caveat>",
+                    },
+                },
+                {
+                    "type": "user",
+                    "message": {
+                        "role": "user",
+                        "content": "<command-name>/model</command-name>",
+                    },
+                },
+                {
+                    "type": "user",
+                    "message": {
+                        "role": "user",
+                        "content": "<local-command-stdout>Set model</local-command-stdout>",
+                    },
+                },
+                {
+                    "type": "assistant",
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "The retry behavior is unchanged.",
+                            }
+                        ],
+                    },
+                },
+            ]
+            path.write_text(
+                "\n".join(json.dumps(record) for record in records),
+                encoding="utf-8",
+            )
+
+            turns = parse_jsonl(path)
+
+        self.assertEqual(
+            [(turn.role, turn.text) for turn in turns],
+            [
+                ("user", "Please inspect the retry behavior."),
+                ("assistant", "The retry behavior is unchanged."),
+            ],
+        )
 
 
 class ScannerCacheTests(unittest.TestCase):
@@ -392,6 +510,70 @@ class HandoffCommandTests(unittest.TestCase):
         self.assertEqual(
             _resume_cmd("agy", "abc123", ["--sandbox"]),
             ["agy", "--dangerously-skip-permissions", "--sandbox", "--conversation", "abc123"],
+        )
+
+
+class TranscriptExportTests(unittest.TestCase):
+    def test_turns_json_exports_normalized_back_and_forth(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "rollout-session.jsonl"
+            records = [
+                {
+                    "type": "session_meta",
+                    "payload": {
+                        "id": "session-id",
+                        "timestamp": "2026-07-30T10:30:00Z",
+                        "cwd": str(path.parent),
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "user_message",
+                        "message": "What changed?",
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "agent_message",
+                        "message": "Only the retry behavior changed.",
+                    },
+                },
+            ]
+            path.write_text(
+                "\n".join(json.dumps(record) for record in records),
+                encoding="utf-8",
+            )
+
+            old_argv = sys.argv
+            sys.argv = ["agentconvos", "--turns", str(path), "--json"]
+            stream = io.StringIO()
+            try:
+                with (
+                    patch("agentconvos.app.ConvoExplorer.run"),
+                    contextlib.redirect_stdout(stream),
+                ):
+                    main()
+            finally:
+                sys.argv = old_argv
+
+        output = stream.getvalue()
+        self.assertIn('"turns"', output)
+        payload = json.loads(output)
+        self.assertEqual(payload["conversation"]["uuid"], "session-id")
+        self.assertEqual(payload["conversation"]["source"], "codex")
+        self.assertEqual(payload["detail"], "text")
+        self.assertEqual(
+            payload["turns"],
+            [
+                {"index": 0, "role": "user", "text": "What changed?"},
+                {
+                    "index": 1,
+                    "role": "assistant",
+                    "text": "Only the retry behavior changed.",
+                },
+            ],
         )
 
 

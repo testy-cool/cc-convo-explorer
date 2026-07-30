@@ -1716,6 +1716,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Browse and analyze Claude Code, Codex, Pi, and Agy conversations")
     parser.add_argument("--analyze", nargs="+", metavar="ID_OR_PATH", help="Analyze conversations (JSONL paths, UUIDs, or slugs)")
     parser.add_argument("--concat", nargs="+", metavar="ID_OR_PATH", help="Export concatenated markdown (JSONL paths, UUIDs, or slugs)")
+    parser.add_argument("--turns", metavar="ID_OR_PATH", help="Export one normalized conversation to stdout")
     parser.add_argument("--model", choices=MODELS, default=DEFAULT_MODEL, help="Gemini model")
     parser.add_argument("--prompt", metavar="TEXT_OR_FILE", help="Custom analysis prompt (inline text or path to .txt/.md file). Use {content} as placeholder for conversation text, {count} for multi-convo count.")
     parser.add_argument("--detail", choices=["text", "tools", "results", "full", "thinking"], default=None, help="Detail level: text, tools, results, full, thinking (text + reasoning blocks)")
@@ -1757,7 +1758,7 @@ def main() -> None:
     parser.add_argument("--summarize", action="store_true",
                         help="Generate missing session summaries via Gemini (cron-friendly)")
     parser.add_argument("--json", action="store_true",
-                        help="Output machine-readable JSON (use with --list, --search, --last, --context)")
+                        help="Output machine-readable JSON (use with --list, --search, --last, --context, --turns)")
     parser.add_argument("--source", choices=["claude", "codex", "pi", "agy"],
                         help="Filter by agent source")
     parser.add_argument("--convo", choices=["claude", "codex", "pi", "agy"],
@@ -1787,6 +1788,42 @@ def main() -> None:
     )
     if args.detail is None:
         args.detail = "results" if (args.deep or args.analyze) else "text"
+
+
+    if args.turns:
+        import json as _json
+        from .parser import get_meta
+
+        paths = _resolve_args([args.turns], extra_dirs=_extra_dirs)
+        path = paths[0]
+        meta = get_meta(path)
+        if meta is None:
+            print(f"Error: could not read metadata from {path}")
+            return
+        turns = parse_jsonl(path, detail=args.detail)
+        if args.json:
+            stat = path.stat()
+            print(_json.dumps({
+                "conversation": {
+                    "uuid": meta.uuid,
+                    "slug": meta.slug,
+                    "source": meta.source,
+                    "timestamp": meta.timestamp,
+                    "cwd": meta.cwd,
+                    "file": str(path.resolve()),
+                    "size_bytes": stat.st_size,
+                    "mtime_ns": stat.st_mtime_ns,
+                },
+                "detail": args.detail,
+                "turn_count": len(turns),
+                "turns": [
+                    {"index": index, "role": turn.role, "text": turn.text}
+                    for index, turn in enumerate(turns)
+                ],
+            }, indent=2))
+        else:
+            print(to_markdown(turns))
+        return
 
 
     if args.peek:
