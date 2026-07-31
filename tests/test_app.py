@@ -13,7 +13,7 @@ from unittest.mock import patch
 import agentconvos.parser as parser_module
 import agentconvos.scanner as scanner_module
 from agentconvos.app import _handoff_agent, _handoff_cmd, _resume_cmd, main
-from agentconvos.parser import ConversationMeta, ConversationStats, get_meta, parse_jsonl
+from agentconvos.parser import ConversationMeta, ConversationStats, SearchHit, get_meta, parse_jsonl
 from agentconvos.scanner import Project, scan_projects
 
 
@@ -828,6 +828,130 @@ class TranscriptExportTests(unittest.TestCase):
                 },
             ],
         )
+
+
+class SearchCliTests(unittest.TestCase):
+    def test_filtered_search_keeps_the_complete_persistent_index(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            codex_path = root / "codex.jsonl"
+            opencode_path = root / "opencode.jsonl"
+            codex_path.write_text("codex", encoding="utf-8")
+            opencode_path.write_text("opencode", encoding="utf-8")
+            codex = ConversationMeta(
+                path=codex_path,
+                uuid="codex-session",
+                slug="codex",
+                timestamp="2026-07-31T10:00:00Z",
+                cwd=str(root),
+                preview="Codex result",
+                source="codex",
+            )
+            opencode = ConversationMeta(
+                path=opencode_path,
+                uuid="opencode-session",
+                slug="opencode",
+                timestamp="2026-07-30T10:00:00Z",
+                cwd=str(root),
+                preview="OpenCode result",
+                source="opencode",
+            )
+            filtered = [Project("codex:tmp", f"[codex] {root}", [codex])]
+            complete = filtered + [
+                Project("opencode:tmp", f"[opencode] {root}", [opencode])
+            ]
+
+            class FakeIndex:
+                instance = None
+
+                def __init__(self):
+                    self.synced = None
+                    self.searched = None
+                    type(self).instance = self
+
+                def sync(self, conversations, **_kwargs):
+                    self.synced = list(conversations)
+
+                def search_hits(self, query, conversations):
+                    self.searched = (query, list(conversations))
+                    return []
+
+            old_argv = sys.argv
+            sys.argv = [
+                "agentconvos",
+                "--search",
+                "result",
+                "--source",
+                "codex",
+                "--json",
+            ]
+            stream = io.StringIO()
+            try:
+                with (
+                    patch(
+                        "agentconvos.scanner.scan_projects",
+                        side_effect=[filtered, complete],
+                    ),
+                    patch("agentconvos.app.ConversationSearchIndex", FakeIndex),
+                    contextlib.redirect_stdout(stream),
+                ):
+                    main()
+            finally:
+                sys.argv = old_argv
+
+        self.assertEqual(FakeIndex.instance.synced, [codex, opencode])
+        self.assertEqual(FakeIndex.instance.searched, ("result", [codex]))
+        self.assertEqual(json.loads(stream.getvalue())["total_searched"], 1)
+
+    def test_cli_search_uses_the_persistent_turn_index(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "session.jsonl"
+            path.write_text("indexed", encoding="utf-8")
+            meta = ConversationMeta(
+                path=path,
+                uuid="indexed-session",
+                slug="indexed-search",
+                timestamp="2026-07-31T10:00:00Z",
+                cwd=str(path.parent),
+                preview="Find the indexed result",
+                source="codex",
+            )
+            project = Project("codex:tmp", f"[codex] {path.parent}", [meta])
+            hit = SearchHit(meta, 2, "assistant", "the exact indexed result")
+
+            class FakeIndex:
+                instance = None
+
+                def __init__(self):
+                    self.synced = None
+                    self.searched = None
+                    type(self).instance = self
+
+                def sync(self, conversations, **_kwargs):
+                    self.synced = list(conversations)
+
+                def search_hits(self, query, conversations):
+                    self.searched = (query, list(conversations))
+                    return [hit]
+
+            old_argv = sys.argv
+            sys.argv = ["agentconvos", "--search", "indexed result", "--json"]
+            stream = io.StringIO()
+            try:
+                with (
+                    patch("agentconvos.scanner.scan_projects", return_value=[project]),
+                    patch("agentconvos.app.ConversationSearchIndex", FakeIndex),
+                    contextlib.redirect_stdout(stream),
+                ):
+                    main()
+            finally:
+                sys.argv = old_argv
+
+        payload = json.loads(stream.getvalue())
+        self.assertEqual(FakeIndex.instance.synced, [meta])
+        self.assertEqual(FakeIndex.instance.searched, ("indexed result", [meta]))
+        self.assertEqual(payload["hits"][0]["uuid"], "indexed-session")
+        self.assertEqual(payload["hits"][0]["turn_index"], 2)
 
 
 class AgyConversationTests(unittest.TestCase):

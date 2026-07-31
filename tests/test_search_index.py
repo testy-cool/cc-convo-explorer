@@ -1,8 +1,9 @@
 import tempfile
 import unittest
+import sqlite3
 from pathlib import Path
 
-from agentconvos.parser import ConversationMeta, Turn
+from agentconvos.parser import ConversationMeta, Turn, conversation_signature
 
 
 def _meta(path: Path, uuid: str = "session-one") -> ConversationMeta:
@@ -19,6 +20,103 @@ def _meta(path: Path, uuid: str = "session-one") -> ConversationMeta:
 
 
 class ConversationSearchIndexTests(unittest.TestCase):
+    def test_search_hits_rank_exact_turns_and_keep_cross_turn_and_semantics(self):
+        from agentconvos.search_index import ConversationSearchIndex
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            split_path = root / "split.jsonl"
+            exact_path = root / "exact.jsonl"
+            split_path.write_text("split", encoding="utf-8")
+            exact_path.write_text("exact", encoding="utf-8")
+            split = _meta(split_path, "split-session")
+            exact = _meta(exact_path, "exact-session")
+            turns = {
+                split_path: [
+                    Turn("user", "Investigate the auth middleware"),
+                    Turn("assistant", "The request IDs disappear in the retry path"),
+                ],
+                exact_path: [
+                    Turn("user", "The auth request IDs fail together"),
+                    Turn("assistant", "I reproduced the issue"),
+                ],
+            }
+            parse_calls = []
+
+            def parse_conversation(path: Path):
+                parse_calls.append(path)
+                return turns[path]
+
+            index = ConversationSearchIndex(root / "search.sqlite3")
+            index.sync([split, exact], parse_conversation=parse_conversation)
+            hits = index.search_hits("auth request", [split, exact])
+
+        self.assertEqual(parse_calls, [split_path, exact_path])
+        self.assertEqual(hits[0].meta.uuid, "exact-session")
+        self.assertEqual(hits[0].turn_index, 0)
+        self.assertEqual(hits[0].role, "user")
+        self.assertIn("auth request", hits[0].snippet.casefold())
+        self.assertIn("split-session", {hit.meta.uuid for hit in hits})
+
+    def test_sync_backfills_turn_rows_for_an_existing_conversation_index(self):
+        from agentconvos.search_index import ConversationSearchIndex
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            transcript = root / "session.jsonl"
+            transcript.write_text("existing", encoding="utf-8")
+            meta = _meta(transcript)
+            index_path = root / "search.sqlite3"
+            size_bytes, mtime_ns = conversation_signature(transcript)
+            metadata = ConversationSearchIndex._metadata(meta)
+
+            connection = sqlite3.connect(index_path)
+            try:
+                connection.executescript(
+                    """
+                    CREATE TABLE search_documents (
+                        path TEXT PRIMARY KEY,
+                        uuid TEXT NOT NULL,
+                        size INTEGER NOT NULL,
+                        mtime_ns INTEGER NOT NULL,
+                        metadata_key TEXT NOT NULL
+                    );
+                    CREATE VIRTUAL TABLE search_documents_fts USING fts5(
+                        uuid UNINDEXED,
+                        path UNINDEXED,
+                        metadata,
+                        content,
+                        tokenize='unicode61 remove_diacritics 2'
+                    );
+                    """
+                )
+                connection.execute(
+                    "INSERT INTO search_documents VALUES (?, ?, ?, ?, ?)",
+                    (str(transcript), meta.uuid, size_bytes, mtime_ns, metadata),
+                )
+                connection.execute(
+                    "INSERT INTO search_documents_fts VALUES (?, ?, ?, ?)",
+                    (meta.uuid, str(transcript), metadata, "legacy searchable text"),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            parse_calls = []
+
+            def parse_conversation(path: Path):
+                parse_calls.append(path)
+                return [Turn("assistant", "Backfilled exact turn text")]
+
+            index = ConversationSearchIndex(index_path)
+            result = index.sync([meta], parse_conversation=parse_conversation)
+            hits = index.search_hits("backfilled exact", [meta])
+
+        self.assertEqual(result.indexed, 1)
+        self.assertEqual(parse_calls, [transcript])
+        self.assertEqual(hits[0].turn_index, 0)
+        self.assertEqual(hits[0].role, "assistant")
+
     def test_sync_reuses_unchanged_rows_and_returns_prefix_matches(self):
         from agentconvos.search_index import ConversationSearchIndex
 

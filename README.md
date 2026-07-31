@@ -35,6 +35,10 @@ agentconvos --search "auth" --source claude --json
 
 Search is case-insensitive. Separate words use AND matching across a conversation,
 quoted text stays together as an exact phrase, and the strongest matches appear first.
+CLI results come from a persistent turn-level SQLite index, so each hit includes the
+original role and turn number without reparsing every transcript. Existing indexes
+receive a one-time turn backfill on the first search; a large archive can take several
+minutes once, after which only new or changed conversations are reindexed.
 
 ### Fast interactive find
 

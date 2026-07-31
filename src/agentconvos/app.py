@@ -149,7 +149,6 @@ from .parser import (
     get_stats,
     parse_jsonl,
     parse_search_terms,
-    search_conversations,
     to_markdown,
 )
 from .analyzer import MODELS, DEFAULT_MODEL, SINGLE_PROMPT, MULTI_PROMPT
@@ -1881,15 +1880,53 @@ def main() -> None:
 
 
     if args.search:
+        import sys as _sys
         from .scanner import scan_projects
         projects = scan_projects(**_scan_kwargs)
-        all_paths = [c.path for p in projects for c in p.conversations]
-        hits = search_conversations(all_paths, args.search)
+        all_conversations = [c for p in projects for c in p.conversations]
+        index_conversations = all_conversations
+        if source_arg or args.after or args.before:
+            complete_projects = scan_projects(extra_dirs=_extra_dirs)
+            index_conversations = [
+                conversation
+                for project in complete_projects
+                for conversation in project.conversations
+            ]
+        search_index = ConversationSearchIndex()
+        progress_visible = False
+        last_reported = -100
+
+        def report_search_index(progress: IndexSyncStats) -> None:
+            nonlocal progress_visible, last_reported
+            if not _sys.stderr.isatty() or progress.indexed < 10:
+                return
+            if progress.checked - last_reported < 100 and progress.checked != progress.total:
+                return
+            last_reported = progress.checked
+            progress_visible = True
+            print(
+                f"\rUpdating turn index: {progress.checked}/{progress.total}",
+                end="",
+                file=_sys.stderr,
+                flush=True,
+            )
+
+        sync_result = search_index.sync(
+            index_conversations,
+            on_progress=report_search_index,
+        )
+        if progress_visible:
+            print(
+                f"\rIndexed {sync_result.indexed} changed conversations"
+                f" ({sync_result.failed} failed).{' ' * 20}",
+                file=_sys.stderr,
+            )
+        hits = search_index.search_hits(args.search, all_conversations)
         if args.json:
             import json as _json
             print(_json.dumps({
                 "query": args.search,
-                "total_searched": len(all_paths),
+                "total_searched": len(all_conversations),
                 "hits": [
                     {
                         "uuid": h.meta.uuid,
@@ -1906,7 +1943,7 @@ def main() -> None:
                 ],
             }, indent=2))
         else:
-            print(f"Searching {len(all_paths)} conversations for \"{args.search}\"...\n")
+            print(f"Searching {len(all_conversations)} conversations for \"{args.search}\"...\n")
             if not hits:
                 print("No results found.")
             else:
