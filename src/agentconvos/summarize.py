@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from datetime import datetime, timezone
 
-from .parser import ConversationMeta, parse_jsonl, DETAIL_TEXT
+from .parser import ConversationMeta, conversation_signature, parse_jsonl, DETAIL_TEXT
 
 SUMMARIES_DIR = Path.home() / ".claude" / "convo-explorer" / "summaries"
 BIFROST_URL = "https://bifrost.voidxd.cloud/v1/chat/completions"
@@ -39,7 +39,7 @@ def _needs_summary(meta: ConversationMeta) -> bool:
     cache = SUMMARIES_DIR / f"{meta.uuid}.json"
     if not cache.exists():
         return True
-    return meta.path.stat().st_mtime > cache.stat().st_mtime
+    return conversation_signature(meta.path)[1] > cache.stat().st_mtime_ns
 
 
 def _write_cache(uuid: str, summary: str) -> None:

@@ -1,4 +1,4 @@
-"""Parse Claude Code, Codex, Pi, and Agy conversation logs into structured data."""
+"""Parse Claude Code, Codex, Pi, Agy, and OpenCode conversations."""
 
 from __future__ import annotations
 
@@ -55,12 +55,63 @@ class ConversationMeta:
     cwd: str
     preview: str  # first user message, truncated
     turn_count: int = 0
-    source: str = "claude"  # "claude", "codex", "pi", or "agy"
+    source: str = "claude"  # "claude", "codex", "pi", "agy", or "opencode"
     git_branch: str = ""
 
 
+_OPENCODE_REF_SEPARATOR = "::opencode-session="
+
+
+def _opencode_session_path(database_path: Path, session_id: str) -> Path:
+    """Return a stable virtual path identifying one session inside OpenCode's DB."""
+    return Path(f"{database_path}{_OPENCODE_REF_SEPARATOR}{session_id}")
+
+
+def _split_opencode_session_path(path: Path) -> tuple[Path, str] | None:
+    database, separator, session_id = str(path).rpartition(_OPENCODE_REF_SEPARATOR)
+    if not separator or not database or not session_id:
+        return None
+    return Path(database), session_id
+
+
+def conversation_signature(path: Path) -> tuple[int, int]:
+    """Return content size and modification time for one logical conversation."""
+    reference = _split_opencode_session_path(path)
+    if not reference:
+        stat = path.stat()
+        return stat.st_size, stat.st_mtime_ns
+
+    database_path, session_id = reference
+    try:
+        conn = sqlite3.connect(f"file:{database_path}?mode=ro", uri=True)
+        try:
+            row = conn.execute(
+                """
+                SELECT time_updated,
+                       (SELECT coalesce(sum(length(data)), 0)
+                        FROM message WHERE session_id = session.id)
+                       +
+                       (SELECT coalesce(sum(length(data)), 0)
+                        FROM part WHERE session_id = session.id)
+                FROM session
+                WHERE id = ?
+                """,
+                (session_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+    except sqlite3.Error as error:
+        raise OSError(f"Could not inspect OpenCode session {session_id}") from error
+    if row is None:
+        raise FileNotFoundError(f"OpenCode session not found: {session_id}")
+    updated_ms, size_bytes = row
+    return int(size_bytes or 0), int(updated_ms or 0) * 1_000_000
+
+
 def _detect_format(path: Path) -> str:
-    """Detect whether a conversation file is Claude Code, Codex, Pi, or Agy format."""
+    """Detect the agent conversation format represented by *path*."""
+    if _split_opencode_session_path(path):
+        return "opencode"
     try:
         if path.suffix == ".db" and _is_agy_db(path):
             return "agy"
@@ -113,6 +164,8 @@ def get_meta(path: Path) -> ConversationMeta | None:
         return _get_meta_pi(path)
     if fmt == "agy":
         return _get_meta_agy(path)
+    if fmt == "opencode":
+        return _get_meta_opencode(path)
     return _get_meta_claude(path)
 
 
@@ -435,6 +488,110 @@ def _ms_to_iso(value) -> str:
     return datetime.fromtimestamp(value / 1000, tz=timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _opencode_rows(database_path: Path, session_id: str | None = None) -> list[tuple]:
+    where = "WHERE id = ?" if session_id else ""
+    parameters = (session_id,) if session_id else ()
+    try:
+        conn = sqlite3.connect(f"file:{database_path}?mode=ro", uri=True)
+        try:
+            return conn.execute(
+                f"""
+                SELECT id, slug, directory, title, time_created, time_updated
+                FROM session
+                {where}
+                ORDER BY time_updated DESC, id
+                """,
+                parameters,
+            ).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return []
+
+
+def _opencode_previews(database_path: Path, session_ids: set[str]) -> dict[str, str]:
+    if not session_ids:
+        return {}
+    previews: dict[str, str] = {}
+    try:
+        conn = sqlite3.connect(f"file:{database_path}?mode=ro", uri=True)
+        try:
+            rows = conn.execute(
+                """
+                SELECT message.session_id, message.data, part.data
+                FROM message
+                JOIN part ON part.message_id = message.id
+                ORDER BY message.time_created, message.id, part.time_created, part.id
+                """
+            )
+            for session_id, message_blob, part_blob in rows:
+                if session_id not in session_ids or session_id in previews:
+                    continue
+                try:
+                    message = json.loads(message_blob)
+                    part = json.loads(part_blob)
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                if message.get("role") != "user" or part.get("type") != "text":
+                    continue
+                text = str(part.get("text", "")).strip()
+                if text:
+                    previews[session_id] = text.replace("\n", " ")[:120]
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return previews
+    return previews
+
+
+def list_opencode_metas(database_path: Path) -> list[ConversationMeta]:
+    """List sessions from an OpenCode SQLite database."""
+    rows = _opencode_rows(database_path)
+    previews = _opencode_previews(database_path, {str(row[0]) for row in rows})
+    metas: list[ConversationMeta] = []
+    for session_id, generated_slug, directory, title, _created, updated in rows:
+        session_id = str(session_id)
+        title = str(title or "").strip()
+        generated_slug = str(generated_slug or "").strip()
+        slug = title if title and not title.startswith("New session - ") else generated_slug
+        metas.append(
+            ConversationMeta(
+                path=_opencode_session_path(database_path, session_id),
+                uuid=session_id,
+                slug=slug,
+                timestamp=_ms_to_iso(updated),
+                cwd=str(directory or "").strip(),
+                preview=previews.get(session_id, ""),
+                source="opencode",
+            )
+        )
+    return metas
+
+
+def _get_meta_opencode(path: Path) -> ConversationMeta | None:
+    reference = _split_opencode_session_path(path)
+    if not reference:
+        return None
+    database_path, session_id = reference
+    rows = _opencode_rows(database_path, session_id)
+    if not rows:
+        return None
+    previews = _opencode_previews(database_path, {session_id})
+    _id, generated_slug, directory, title, _created, updated = rows[0]
+    title = str(title or "").strip()
+    generated_slug = str(generated_slug or "").strip()
+    slug = title if title and not title.startswith("New session - ") else generated_slug
+    return ConversationMeta(
+        path=path,
+        uuid=session_id,
+        slug=slug,
+        timestamp=_ms_to_iso(updated),
+        cwd=str(directory or "").strip(),
+        preview=previews.get(session_id, ""),
+        source="opencode",
+    )
+
+
 def _get_meta_agy(path: Path) -> ConversationMeta | None:
     """Extract metadata from an Agy/Antigravity CLI trajectory database."""
     conversation_id = path.stem
@@ -535,6 +692,8 @@ def parse_jsonl(path: Path, detail: str = DETAIL_TEXT, last_n: int = 0) -> list[
         turns = _parse_jsonl_pi(path, detail)
     elif fmt == "agy":
         turns = _parse_db_agy(path, detail)
+    elif fmt == "opencode":
+        turns = _parse_db_opencode(path, detail)
     else:
         turns = _parse_jsonl_claude(path, detail)
     if last_n > 0:
@@ -1125,6 +1284,108 @@ def _parse_db_agy(path: Path, detail: str = DETAIL_TEXT) -> list[Turn]:
     return turns
 
 
+def _summarize_opencode_tool(name: str, arguments: dict) -> str:
+    command = arguments.get("command")
+    if command:
+        return f"`{str(command)[:120]}`"
+    for key in ("filePath", "path", "directory", "url"):
+        if arguments.get(key):
+            return str(arguments[key])
+    pattern = arguments.get("pattern") or arguments.get("query")
+    if pattern:
+        target = arguments.get("path") or arguments.get("directory")
+        return f'"{pattern}"' + (f" in {target}" if target else "")
+    description = arguments.get("description")
+    if description:
+        return str(description)
+    if not arguments:
+        return "(no input)"
+    return ", ".join(
+        f"{key}={str(value)[:40]}"
+        for key, value in list(arguments.items())[:4]
+    )
+
+
+def _parse_db_opencode(path: Path, detail: str = DETAIL_TEXT) -> list[Turn]:
+    """Parse one virtual session reference from OpenCode's SQLite database."""
+    reference = _split_opencode_session_path(path)
+    if not reference:
+        return []
+    database_path, session_id = reference
+    include_tools = detail in (DETAIL_TOOLS, DETAIL_RESULTS, DETAIL_FULL)
+    include_results = detail in (DETAIL_RESULTS, DETAIL_FULL)
+    include_thinking = detail in (DETAIL_THINKING, DETAIL_FULL)
+    truncate_results = detail == DETAIL_RESULTS
+
+    try:
+        conn = sqlite3.connect(f"file:{database_path}?mode=ro", uri=True)
+        try:
+            rows = conn.execute(
+                """
+                SELECT message.id, message.data, part.data
+                FROM message
+                JOIN part ON part.message_id = message.id
+                WHERE message.session_id = ?
+                ORDER BY message.time_created, message.id, part.time_created, part.id
+                """,
+                (session_id,),
+            ).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return []
+
+    turns: list[Turn] = []
+    current_message_id = ""
+    current_role = ""
+    current_chunks: list[str] = []
+
+    def flush() -> None:
+        if current_role not in ("user", "assistant") or not current_chunks:
+            return
+        text = "\n\n".join(chunk for chunk in current_chunks if chunk).strip()
+        if text:
+            turns.append(Turn(role=current_role, text=text))
+
+    for message_id, message_blob, part_blob in rows:
+        try:
+            message = json.loads(message_blob)
+            part = json.loads(part_blob)
+        except (TypeError, json.JSONDecodeError):
+            continue
+
+        if message_id != current_message_id:
+            flush()
+            current_message_id = str(message_id)
+            current_role = str(message.get("role", ""))
+            current_chunks = []
+
+        part_type = part.get("type")
+        if part_type == "text":
+            text = str(part.get("text", "")).strip()
+            if text:
+                current_chunks.append(text)
+        elif part_type == "reasoning" and include_thinking:
+            text = str(part.get("text", "")).strip()
+            if text:
+                current_chunks.append(f"> **Thinking:** {text}")
+        elif part_type == "tool" and include_tools:
+            name = str(part.get("tool", "tool"))
+            state = part.get("state") if isinstance(part.get("state"), dict) else {}
+            arguments = state.get("input") if isinstance(state.get("input"), dict) else {}
+            current_chunks.append(f"> **{name}**: {_summarize_opencode_tool(name, arguments)}")
+            if include_results and state.get("output") not in (None, ""):
+                output = state["output"]
+                if not isinstance(output, str):
+                    output = json.dumps(output, ensure_ascii=False)
+                if truncate_results and len(output) > RESULT_TRUNCATE:
+                    output = output[:RESULT_TRUNCATE] + "…"
+                current_chunks.append(f"> **Result:** {output}")
+
+    flush()
+    return turns
+
+
 @dataclass
 class SearchHit:
     meta: ConversationMeta
@@ -1240,6 +1501,8 @@ def get_stats(path: Path) -> ConversationStats:
         return _get_stats_pi(path)
     if fmt == "agy":
         return _get_stats_agy(path)
+    if fmt == "opencode":
+        return _get_stats_opencode(path)
     return _get_stats_claude(path)
 
 
@@ -1400,6 +1663,60 @@ def _get_stats_agy(path: Path) -> ConversationStats:
         if step_type not in (14, 15, 23, 98):
             stats.tool_calls += 1
 
+    return stats
+
+
+def _get_stats_opencode(path: Path) -> ConversationStats:
+    """Extract usage stats for one OpenCode session."""
+    stats = ConversationStats()
+    reference = _split_opencode_session_path(path)
+    if not reference:
+        return stats
+    database_path, session_id = reference
+    try:
+        conn = sqlite3.connect(f"file:{database_path}?mode=ro", uri=True)
+        try:
+            messages = conn.execute(
+                "SELECT data FROM message WHERE session_id = ? ORDER BY time_created, id",
+                (session_id,),
+            ).fetchall()
+            stats.tool_calls = conn.execute(
+                """
+                SELECT count(*)
+                FROM part
+                WHERE session_id = ? AND json_extract(data, '$.type') = 'tool'
+                """,
+                (session_id,),
+            ).fetchone()[0]
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return stats
+
+    for (blob,) in messages:
+        try:
+            message = json.loads(blob)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if message.get("role") != "assistant":
+            continue
+        if not stats.model:
+            provider = str(message.get("providerID", "")).strip()
+            model = str(message.get("modelID", "")).strip()
+            stats.model = f"{provider}/{model}" if provider and model else model or provider
+        tokens = message.get("tokens") if isinstance(message.get("tokens"), dict) else {}
+        stats.input_tokens += int(tokens.get("input", 0) or 0)
+        stats.output_tokens += int(tokens.get("output", 0) or 0)
+        cache = tokens.get("cache") if isinstance(tokens.get("cache"), dict) else {}
+        stats.cache_read_tokens += int(cache.get("read", 0) or 0)
+        stats.cache_create_tokens += int(cache.get("write", 0) or 0)
+        timing = message.get("time") if isinstance(message.get("time"), dict) else {}
+        created = timing.get("created")
+        completed = timing.get("completed")
+        if isinstance(created, (int, float)) and isinstance(completed, (int, float)):
+            stats.duration_ms += max(0, int(completed - created))
+        if message.get("error"):
+            stats.api_errors += 1
     return stats
 
 

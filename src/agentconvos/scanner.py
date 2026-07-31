@@ -7,7 +7,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .parser import ConversationMeta, get_meta
+from .parser import ConversationMeta, get_meta, list_opencode_metas
 
 _CACHE_PATH = Path(os.environ.get("USERPROFILE", Path.home())) / ".claude" / "convo-explorer" / "meta-cache.json"
 _CACHE_VERSION = 2
@@ -102,6 +102,14 @@ def _agy_conversations_dir() -> Path:
     return _agy_home() / "conversations"
 
 
+def _opencode_db_path() -> Path:
+    data_home = os.environ.get("XDG_DATA_HOME")
+    if data_home:
+        return Path(data_home).expanduser() / "opencode" / "opencode.db"
+    user_home = Path(os.environ.get("USERPROFILE", Path.home()))
+    return user_home / ".local" / "share" / "opencode" / "opencode.db"
+
+
 def _folder_to_path(folder_name: str) -> str:
     """Best-effort decode of folder name back to a path.
 
@@ -139,7 +147,7 @@ def scan_projects(
 
     Args:
         extra_dirs: Additional project directories to scan.
-        source: Filter by agent — "claude", "codex", "pi", or "agy".
+        source: Filter by agent — "claude", "codex", "pi", "agy", or "opencode".
         after: Only include conversations after this ISO date (e.g. "2026-05-01").
         before: Only include conversations before this ISO date.
     """
@@ -245,6 +253,23 @@ def scan_projects(
             projects.append(Project(
                 folder_name=folder,
                 display_path=f"[agy] {cwd}",
+                conversations=convos,
+            ))
+
+    # Scan OpenCode's shared SQLite store — expose each DB session separately.
+    opencode_db = _opencode_db_path()
+    if opencode_db.is_file():
+        by_cwd_opencode: dict[str, list[ConversationMeta]] = {}
+        for conversation in list_opencode_metas(opencode_db):
+            key = conversation.cwd or "(no project)"
+            by_cwd_opencode.setdefault(key, []).append(conversation)
+
+        for cwd, convos in by_cwd_opencode.items():
+            convos.sort(key=lambda c: c.timestamp, reverse=True)
+            folder = "opencode:" + (Path(cwd).name if cwd and cwd != "(no project)" else "misc")
+            projects.append(Project(
+                folder_name=folder,
+                display_path=f"[opencode] {cwd}",
                 conversations=convos,
             ))
 

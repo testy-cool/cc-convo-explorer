@@ -1,7 +1,7 @@
 [project]
 name = "agentconvos"
 version = "0.1.0"
-description = "Discover, query, and browse AI coding agent conversations (Claude Code, Codex, Pi, Agy)"
+description = "Discover, query, and browse AI coding agent conversations (Claude Code, Codex, Pi, Agy, OpenCode)"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

@@ -1,4 +1,4 @@
-"""Textual TUI for browsing Claude Code, Codex, Pi, and Agy conversations."""
+"""Textual TUI for browsing conversations across local coding agents."""
 
 from __future__ import annotations
 
@@ -37,8 +37,9 @@ _SOURCE_STYLE = {
     "codex": ("Codex", "bold #00cc66"),
     "pi": ("Pi", "bold #7c6fff"),
     "agy": ("Agy", "bold #00a3ff"),
+    "opencode": ("OpenCode", "bold #ffaa00"),
 }
-_SOURCE_ORDER = ["claude", "codex", "pi", "agy"]
+_SOURCE_ORDER = ["claude", "codex", "pi", "agy", "opencode"]
 
 
 def _group_key(display_path: str, source: str) -> tuple[str, str]:
@@ -78,7 +79,7 @@ def _project_real_path(project: Project, convos: list[ConversationMeta] | None =
             if convo.cwd:
                 return convo.cwd
     display_path = project.display_path
-    for prefix in ("[codex] ", "[pi] ", "[agy] "):
+    for prefix in ("[codex] ", "[pi] ", "[agy] ", "[opencode] "):
         if display_path.startswith(prefix):
             return display_path[len(prefix):]
     return display_path
@@ -144,6 +145,7 @@ from .parser import (
     DETAIL_RESULTS,
     DETAIL_TEXT,
     DETAIL_TOOLS,
+    conversation_signature,
     get_stats,
     parse_jsonl,
     parse_search_terms,
@@ -151,6 +153,13 @@ from .parser import (
     to_markdown,
 )
 from .analyzer import MODELS, DEFAULT_MODEL, SINGLE_PROMPT, MULTI_PROMPT
+
+
+def _conversation_size(path: Path) -> int:
+    try:
+        return conversation_signature(path)[0]
+    except OSError:
+        return 0
 
 
 def _match_ranges(text: str, terms: list[str]) -> list[tuple[int, int]]:
@@ -1072,10 +1081,7 @@ History appears immediately. Full-text results arrive live while indexing runs i
         total_bytes = 0
         for nd in nodes:
             if nd.meta:
-                try:
-                    total_bytes += nd.meta.path.stat().st_size
-                except OSError:
-                    pass
+                total_bytes += _conversation_size(nd.meta.path)
         tokens = total_bytes // 4
         if tokens > 1_000_000:
             return f"~{tokens / 1_000_000:.1f}M tokens"
@@ -1399,7 +1405,7 @@ History appears immediately. Full-text results arrive live while indexing runs i
         if not self.current_meta:
             self.notify("Select a conversation first", severity="warning")
             return
-        if self.current_meta.source not in ("claude", "codex", "pi", "agy"):
+        if self.current_meta.source not in ("claude", "codex", "pi", "agy", "opencode"):
             self.notify(f"Resume not supported for {self.current_meta.source.title()} conversations", severity="warning")
             return
         meta = self.current_meta
@@ -1473,7 +1479,7 @@ def _pick_conversation(convos: list, cwd: str):
         name = c.slug or c.uuid[:8]
         summary = summaries.get(c.uuid, "")
         preview = summary[:60] if summary else (c.preview or "")[:50]
-        size = c.path.stat().st_size if c.path.exists() else 0
+        size = _conversation_size(c.path)
         tokens = size // 4
         if tokens >= 1_000_000:
             tok_str = f"{tokens / 1_000_000:.1f}M"
@@ -1525,10 +1531,7 @@ def _print_fuzzy_preview(path: Path, max_parse_bytes: int = 4_000_000) -> None:
     if meta.preview:
         print(f"\nFirst prompt\n{meta.preview}")
 
-    try:
-        size = path.stat().st_size
-    except OSError:
-        size = 0
+    size = _conversation_size(path)
     if size > max_parse_bytes:
         print(
             f"\nLarge transcript ({size / 1_000_000:.1f} MB). "
@@ -1670,6 +1673,9 @@ def _handoff_cmd(
         return ["codex"] + codex_args + extra + [message]
     if source == "pi":
         return ["pi"] + extra + [message]
+    if source == "opencode":
+        permission_args = ["--auto"] if yolo else []
+        return ["opencode"] + permission_args + extra + ["--prompt", message]
     if source == "agy":
         permission_args = ["--dangerously-skip-permissions"] if yolo else []
         return ["agy"] + permission_args + extra + ["--prompt-interactive", message]
@@ -1703,6 +1709,9 @@ def _resume_cmd(
     if source == "agy":
         permission_args = ["--dangerously-skip-permissions"] if yolo else []
         return ["agy"] + permission_args + extra + ["--conversation", uuid]
+    if source == "opencode":
+        permission_args = ["--auto"] if yolo else []
+        return ["opencode"] + permission_args + extra + ["-s", uuid]
     return None
 
 
@@ -1725,7 +1734,7 @@ def _resume_description(meta: ConversationMeta) -> str:
 
 def main() -> None:
     import argparse
-    parser = argparse.ArgumentParser(description="Browse and analyze Claude Code, Codex, Pi, and Agy conversations")
+    parser = argparse.ArgumentParser(description="Browse and analyze Claude Code, Codex, Pi, Agy, and OpenCode conversations")
     parser.add_argument("--analyze", nargs="+", metavar="ID_OR_PATH", help="Analyze conversations (JSONL paths, UUIDs, or slugs)")
     parser.add_argument("--concat", nargs="+", metavar="ID_OR_PATH", help="Export concatenated markdown (JSONL paths, UUIDs, or slugs)")
     parser.add_argument("--turns", metavar="ID_OR_PATH", help="Export one normalized conversation to stdout")
@@ -1761,7 +1770,7 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="Print the command instead of running it (use with --resume/--handoff)")
     parser.add_argument("--handoff", nargs="?", const="latest", default=None, metavar="MODE",
                         help="Export CWD conversation and start new session. Use --convo SOURCE --handoff AGENT to split source and target.")
-    parser.add_argument("--handoff-agent", choices=["claude", "codex", "pi", "agy"], metavar="AGENT",
+    parser.add_argument("--handoff-agent", choices=["claude", "codex", "pi", "agy", "opencode"], metavar="AGENT",
                         help="Agent CLI to start for --handoff (defaults to selected conversation source)")
     parser.add_argument("--yolo", action="store_true",
                         help="Use the target agent's no-prompt permission mode for resume/handoff commands")
@@ -1771,9 +1780,9 @@ def main() -> None:
                         help="Generate missing session summaries via Gemini (cron-friendly)")
     parser.add_argument("--json", action="store_true",
                         help="Output machine-readable JSON (use with --list, --search, --last, --context, --turns)")
-    parser.add_argument("--source", choices=["claude", "codex", "pi", "agy"],
+    parser.add_argument("--source", choices=["claude", "codex", "pi", "agy", "opencode"],
                         help="Filter by agent source")
-    parser.add_argument("--convo", choices=["claude", "codex", "pi", "agy"],
+    parser.add_argument("--convo", choices=["claude", "codex", "pi", "agy", "opencode"],
                         help="Conversation source to use, e.g. --convo agy --handoff codex --yolo")
     parser.add_argument("--after", metavar="DATE",
                         help="Only conversations after this date (YYYY-MM-DD)")
@@ -1814,7 +1823,7 @@ def main() -> None:
             return
         turns = parse_jsonl(path, detail=args.detail)
         if args.json:
-            stat = path.stat()
+            size_bytes, mtime_ns = conversation_signature(path)
             print(_json.dumps({
                 "conversation": {
                     "uuid": meta.uuid,
@@ -1822,9 +1831,9 @@ def main() -> None:
                     "source": meta.source,
                     "timestamp": meta.timestamp,
                     "cwd": meta.cwd,
-                    "file": str(path.resolve()),
-                    "size_bytes": stat.st_size,
-                    "mtime_ns": stat.st_mtime_ns,
+                    "file": str(path),
+                    "size_bytes": size_bytes,
+                    "mtime_ns": mtime_ns,
                 },
                 "detail": args.detail,
                 "turn_count": len(turns),
@@ -1935,7 +1944,7 @@ def main() -> None:
         selected = cwd_convos[:n]
 
         def _convo_record(c):
-            size = c.path.stat().st_size if c.path.exists() else 0
+            size = _conversation_size(c.path)
             rec = {
                 "uuid": c.uuid,
                 "slug": c.slug,
@@ -1965,7 +1974,7 @@ def main() -> None:
                 name = c.slug or c.uuid[:8]
                 summary = summaries.get(c.uuid, "")
                 src = c.source
-                size = c.path.stat().st_size if c.path.exists() else 0
+                size = _conversation_size(c.path)
                 tokens = size // 4
                 tok_str = f"{tokens // 1000}K" if tokens >= 1000 else str(tokens)
                 print(f"  {ts}  [{src}]  {name}  ~{tok_str} tok")
@@ -1985,7 +1994,7 @@ def main() -> None:
                 for c in project.conversations
                 if c.cwd
                 and os.path.realpath(c.cwd) == cwd
-                and c.source in ("claude", "codex", "pi", "agy")
+                and c.source in ("claude", "codex", "pi", "agy", "opencode")
             ]
             cwd_convos.sort(key=lambda c: c.timestamp or "", reverse=True)
             if not cwd_convos:
@@ -2033,7 +2042,7 @@ def main() -> None:
                     cwd_convos.append(c)
         source_filter = source_arg
         target_agent_from_handoff = None
-        if args.handoff in ("claude", "codex", "pi", "agy"):
+        if args.handoff in ("claude", "codex", "pi", "agy", "opencode"):
             if source_arg:
                 target_agent_from_handoff = args.handoff
             else:
@@ -2079,7 +2088,7 @@ def main() -> None:
             import json as _json
 
             def _convo_dict(c):
-                size = c.path.stat().st_size if c.path.exists() else 0
+                size = _conversation_size(c.path)
                 rec = {
                     "uuid": c.uuid,
                     "slug": c.slug,
@@ -2115,7 +2124,7 @@ def main() -> None:
                 for c in p.conversations:
                     ts = c.timestamp[:10] if c.timestamp else "?"
                     name = c.slug or c.uuid[:8]
-                    size = c.path.stat().st_size if c.path.exists() else 0
+                    size = _conversation_size(c.path)
                     tokens = size // 4
                     if tokens >= 1_000_000:
                         tok_str = f"{tokens / 1_000_000:.1f}M"

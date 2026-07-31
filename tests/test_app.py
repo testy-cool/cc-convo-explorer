@@ -79,6 +79,128 @@ def _write_agy_history(home: Path, conversation_id: str, workspace: Path) -> Non
     history.write_text("\n".join(json.dumps(r) for r in records), encoding="utf-8")
 
 
+def _write_opencode_db(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE session (
+                id text PRIMARY KEY,
+                slug text NOT NULL,
+                directory text NOT NULL,
+                title text NOT NULL,
+                time_created integer NOT NULL,
+                time_updated integer NOT NULL
+            );
+            CREATE TABLE message (
+                id text PRIMARY KEY,
+                session_id text NOT NULL,
+                time_created integer NOT NULL,
+                data text NOT NULL
+            );
+            CREATE TABLE part (
+                id text PRIMARY KEY,
+                message_id text NOT NULL,
+                session_id text NOT NULL,
+                time_created integer NOT NULL,
+                data text NOT NULL
+            );
+            """
+        )
+        sessions = [
+            (
+                "ses_alpha",
+                "bright-lake",
+                "/work/alpha",
+                "Fix the alpha retry loop",
+                1780000000000,
+                1780000200000,
+            ),
+            (
+                "ses_beta",
+                "quiet-field",
+                "/work/beta",
+                "Review beta indexing",
+                1780000100000,
+                1780000300000,
+            ),
+        ]
+        conn.executemany("INSERT INTO session VALUES (?, ?, ?, ?, ?, ?)", sessions)
+        messages = [
+            (
+                "msg_alpha_user",
+                "ses_alpha",
+                1780000001000,
+                json.dumps({"role": "user", "time": {"created": 1780000001000}}),
+            ),
+            (
+                "msg_alpha_assistant",
+                "ses_alpha",
+                1780000002000,
+                json.dumps(
+                    {
+                        "role": "assistant",
+                        "modelID": "test-model",
+                        "providerID": "test-provider",
+                        "tokens": {"input": 12, "output": 7, "cache": {"read": 3, "write": 2}},
+                        "time": {"created": 1780000002000, "completed": 1780000002500},
+                    }
+                ),
+            ),
+            (
+                "msg_beta_user",
+                "ses_beta",
+                1780000101000,
+                json.dumps({"role": "user", "time": {"created": 1780000101000}}),
+            ),
+        ]
+        conn.executemany("INSERT INTO message VALUES (?, ?, ?, ?)", messages)
+        parts = [
+            (
+                "prt_alpha_user",
+                "msg_alpha_user",
+                "ses_alpha",
+                1780000001001,
+                json.dumps({"type": "text", "text": "Why does alpha retry twice?"}),
+            ),
+            (
+                "prt_alpha_assistant",
+                "msg_alpha_assistant",
+                "ses_alpha",
+                1780000002001,
+                json.dumps({"type": "text", "text": "The retry loop increments before checking."}),
+            ),
+            (
+                "prt_alpha_tool",
+                "msg_alpha_assistant",
+                "ses_alpha",
+                1780000002002,
+                json.dumps(
+                    {
+                        "type": "tool",
+                        "tool": "read",
+                        "state": {
+                            "status": "completed",
+                            "input": {"filePath": "/work/alpha/retry.py"},
+                        },
+                    }
+                ),
+            ),
+            (
+                "prt_beta_user",
+                "msg_beta_user",
+                "ses_beta",
+                1780000101001,
+                json.dumps({"type": "text", "text": "Check beta indexing."}),
+            ),
+        ]
+        conn.executemany("INSERT INTO part VALUES (?, ?, ?, ?, ?)", parts)
+        conn.commit()
+    finally:
+        conn.close()
+
+
 class CodexParserTests(unittest.TestCase):
     def test_text_parser_excludes_injected_project_instructions(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -287,6 +409,55 @@ class ClaudeParserTests(unittest.TestCase):
         )
 
 
+class OpenCodeParserTests(unittest.TestCase):
+    def test_scanner_lists_each_database_session_as_one_conversation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db_path = root / "opencode.db"
+            cache_path = root / "meta-cache.json"
+            _write_opencode_db(db_path)
+
+            with (
+                patch.dict(os.environ, {"USERPROFILE": str(root)}),
+                patch.object(scanner_module, "_CACHE_PATH", cache_path),
+                patch.object(scanner_module, "_opencode_db_path", return_value=db_path, create=True),
+            ):
+                projects = scan_projects(source="opencode")
+
+        conversations = [c for project in projects for c in project.conversations]
+        self.assertEqual([c.uuid for c in conversations], ["ses_beta", "ses_alpha"])
+        self.assertEqual({c.source for c in conversations}, {"opencode"})
+        self.assertEqual({c.cwd for c in conversations}, {"/work/alpha", "/work/beta"})
+
+    def test_virtual_session_path_resolves_metadata_and_only_its_turns(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "opencode.db"
+            _write_opencode_db(db_path)
+            session_path = parser_module._opencode_session_path(db_path, "ses_alpha")
+
+            meta = get_meta(session_path)
+            turns = parse_jsonl(session_path)
+            turns_with_tools = parse_jsonl(session_path, detail="tools")
+            stats = parser_module.get_stats(session_path)
+
+        self.assertIsNotNone(meta)
+        self.assertEqual(meta.uuid, "ses_alpha")
+        self.assertEqual(meta.slug, "Fix the alpha retry loop")
+        self.assertEqual(meta.preview, "Why does alpha retry twice?")
+        self.assertEqual(
+            [(turn.role, turn.text) for turn in turns],
+            [
+                ("user", "Why does alpha retry twice?"),
+                ("assistant", "The retry loop increments before checking."),
+            ],
+        )
+        self.assertIn("> **read**: /work/alpha/retry.py", turns_with_tools[-1].text)
+        self.assertEqual(stats.model, "test-provider/test-model")
+        self.assertEqual(stats.input_tokens, 12)
+        self.assertEqual(stats.output_tokens, 7)
+        self.assertEqual(stats.tool_calls, 1)
+
+
 class ScannerCacheTests(unittest.TestCase):
     def test_old_metadata_cache_is_invalidated_once(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -343,6 +514,24 @@ class HandoffCommandTests(unittest.TestCase):
         self.assertEqual(
             _resume_cmd("pi", "pi-session"),
             ["pi", "--session", "pi-session"],
+        )
+        self.assertEqual(
+            _resume_cmd("opencode", "ses_opencode"),
+            ["opencode", "-s", "ses_opencode"],
+        )
+
+    def test_opencode_handoff_and_yolo_are_explicit(self):
+        self.assertEqual(
+            _handoff_cmd("opencode", "handoff message"),
+            ["opencode", "--prompt", "handoff message"],
+        )
+        self.assertEqual(
+            _handoff_cmd("opencode", "handoff message", yolo=True),
+            ["opencode", "--auto", "--prompt", "handoff message"],
+        )
+        self.assertEqual(
+            _resume_cmd("opencode", "ses_opencode", yolo=True),
+            ["opencode", "--auto", "-s", "ses_opencode"],
         )
 
     def test_resume_yolo_is_explicit(self):

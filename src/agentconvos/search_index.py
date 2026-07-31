@@ -8,7 +8,13 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Iterable
 
-from .parser import ConversationMeta, Turn, parse_jsonl, parse_search_terms
+from .parser import (
+    ConversationMeta,
+    Turn,
+    conversation_signature,
+    parse_jsonl,
+    parse_search_terms,
+)
 
 
 DEFAULT_INDEX_PATH = Path.home() / ".claude" / "convo-explorer" / "search-index.sqlite3"
@@ -114,11 +120,11 @@ class ConversationSearchIndex:
                 path_key = str(meta.path)
                 metadata = self._metadata(meta)
                 try:
-                    file_stat = meta.path.stat()
+                    size_bytes, mtime_ns = conversation_signature(meta.path)
                     signature = (
                         meta.uuid,
-                        file_stat.st_size,
-                        file_stat.st_mtime_ns,
+                        size_bytes,
+                        mtime_ns,
                         metadata,
                     )
                     if existing.get(path_key) == signature:
@@ -154,8 +160,8 @@ class ConversationSearchIndex:
                                 (
                                     path_key,
                                     meta.uuid,
-                                    file_stat.st_size,
-                                    file_stat.st_mtime_ns,
+                                    size_bytes,
+                                    mtime_ns,
                                     metadata,
                                 ),
                             )

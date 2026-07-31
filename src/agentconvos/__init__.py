@@ -6,7 +6,8 @@ Library API — import these directly:
 
 Discovers sessions from Claude Code (~/.claude/projects/),
 Codex (~/.codex/sessions/), Pi (~/.pi/agent/sessions/),
-and Agy (~/.gemini/antigravity-cli/conversations/).
+Agy (~/.gemini/antigravity-cli/conversations/), and
+OpenCode (~/.local/share/opencode/opencode.db).
 """
 
 from .parser import (

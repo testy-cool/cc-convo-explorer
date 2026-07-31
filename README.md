@@ -1,6 +1,6 @@
 # agentconvos
 
-Discover, query, and browse AI coding agent conversations. Works with Claude Code, Codex, Pi, and Agy.
+Discover, query, and browse AI coding agent conversations. Works with Claude Code, Codex, Pi, Agy, and OpenCode.
 
 Use as a **CLI** (`agentconvos --context --json`), a **Python library** (`from agentconvos import scan_projects`), or an **interactive TUI** (`agentconvos`).
 
@@ -76,7 +76,7 @@ agentconvos --handoff --yolo           # hand off latest conversation to the sam
 
 Resume and handoff preserve each agent's normal permission behavior by default.
 `--yolo` is the explicit opt-in for agents that expose a no-prompt mode. Native
-resume is available for Claude Code, Codex, Pi, and Agy conversations.
+resume is available for Claude Code, Codex, Pi, Agy, and OpenCode conversations.
 
 ### Export
 
@@ -131,7 +131,7 @@ stats = get_stats(projects[0].conversations[0].path)
 agentconvos
 ```
 
-Interactive tree grouped by agent (Claude Code, Codex, Pi, Agy) with search, multi-select, preview, export, and Gemini analysis.
+Interactive tree grouped by agent (Claude Code, Codex, Pi, Agy, OpenCode) with search, multi-select, preview, export, and Gemini analysis.
 
 The history tree renders from cached metadata immediately. A persistent SQLite
 full-text index updates in the background, with progress shown in the lower-right
@@ -163,6 +163,7 @@ directory, full session ID, and command.
 | Codex logs | `~/.codex/sessions/*.jsonl`, `~/.codex/conversations/*.json` |
 | Pi logs | `~/.pi/agent/sessions/**/*.jsonl` |
 | Agy logs | `~/.gemini/antigravity-cli/history.jsonl`, `~/.gemini/antigravity-cli/conversations/*.db` |
+| OpenCode sessions | `~/.local/share/opencode/opencode.db` |
 | Full-text search index | `~/.claude/convo-explorer/search-index.sqlite3` |
 | Summaries | `~/.claude/convo-explorer/summaries/` |
 | Analyses | `~/.claude/convo-explorer/analyses/` |
