@@ -1399,7 +1399,7 @@ History appears immediately. Full-text results arrive live while indexing runs i
         if not self.current_meta:
             self.notify("Select a conversation first", severity="warning")
             return
-        if self.current_meta.source not in ("claude", "codex", "agy"):
+        if self.current_meta.source not in ("claude", "codex", "pi", "agy"):
             self.notify(f"Resume not supported for {self.current_meta.source.title()} conversations", severity="warning")
             return
         meta = self.current_meta
@@ -1661,18 +1661,20 @@ def _handoff_cmd(
     source: str,
     message: str,
     extra_args: list[str] | None = None,
-    codex_yolo: bool = False,
+    yolo: bool = False,
 ) -> list[str]:
     """Build a handoff command for the given target CLI."""
     extra = extra_args or []
     if source == "codex":
-        codex_args = ["--yolo"] if codex_yolo else ["--dangerously-bypass-approvals-and-sandbox"]
+        codex_args = ["--yolo"] if yolo else []
         return ["codex"] + codex_args + extra + [message]
     if source == "pi":
         return ["pi"] + extra + [message]
     if source == "agy":
-        return ["agy", "--dangerously-skip-permissions"] + extra + ["--prompt-interactive", message]
-    return ["claude", "--dangerously-skip-permissions"] + extra + [message]
+        permission_args = ["--dangerously-skip-permissions"] if yolo else []
+        return ["agy"] + permission_args + extra + ["--prompt-interactive", message]
+    permission_args = ["--dangerously-skip-permissions"] if yolo else []
+    return ["claude"] + permission_args + extra + [message]
 
 
 def _handoff_agent(conversation_source: str, requested_agent: str | None, _yolo: bool) -> str:
@@ -1682,15 +1684,25 @@ def _handoff_agent(conversation_source: str, requested_agent: str | None, _yolo:
     return conversation_source
 
 
-def _resume_cmd(source: str, uuid: str, extra_args: list[str] | None = None) -> list[str] | None:
+def _resume_cmd(
+    source: str,
+    uuid: str,
+    extra_args: list[str] | None = None,
+    yolo: bool = False,
+) -> list[str] | None:
     """Build a resume command, or None if the source doesn't support it."""
     extra = extra_args or []
     if source == "claude":
-        return ["claude", "--dangerously-skip-permissions", "-r", uuid] + extra
+        permission_args = ["--dangerously-skip-permissions"] if yolo else []
+        return ["claude"] + permission_args + ["-r", uuid] + extra
     if source == "codex":
-        return ["codex", "resume", "--dangerously-bypass-approvals-and-sandbox"] + extra + [uuid]
+        permission_args = ["--dangerously-bypass-approvals-and-sandbox"] if yolo else []
+        return ["codex", "resume"] + permission_args + extra + [uuid]
+    if source == "pi":
+        return ["pi"] + extra + ["--session", uuid]
     if source == "agy":
-        return ["agy", "--dangerously-skip-permissions"] + extra + ["--conversation", uuid]
+        permission_args = ["--dangerously-skip-permissions"] if yolo else []
+        return ["agy"] + permission_args + extra + ["--conversation", uuid]
     return None
 
 
@@ -1752,7 +1764,7 @@ def main() -> None:
     parser.add_argument("--handoff-agent", choices=["claude", "codex", "pi", "agy"], metavar="AGENT",
                         help="Agent CLI to start for --handoff (defaults to selected conversation source)")
     parser.add_argument("--yolo", action="store_true",
-                        help="Use the target agent's no-prompt permission mode for handoff commands")
+                        help="Use the target agent's no-prompt permission mode for resume/handoff commands")
     parser.add_argument("--export-all", metavar="DIR", help="Export every conversation as individual markdown files to DIR")
     parser.add_argument("--projects-dir", nargs="+", metavar="DIR", help="Additional projects directories to scan (e.g. copied from other machines)")
     parser.add_argument("--summarize", action="store_true",
@@ -1973,7 +1985,7 @@ def main() -> None:
                 for c in project.conversations
                 if c.cwd
                 and os.path.realpath(c.cwd) == cwd
-                and c.source in ("claude", "codex", "agy")
+                and c.source in ("claude", "codex", "pi", "agy")
             ]
             cwd_convos.sort(key=lambda c: c.timestamp or "", reverse=True)
             if not cwd_convos:
@@ -1995,7 +2007,7 @@ def main() -> None:
             if not meta:
                 print(f"Error: could not read metadata from {paths[0]}")
                 return
-        cmd = _resume_cmd(meta.source, meta.uuid, remaining)
+        cmd = _resume_cmd(meta.source, meta.uuid, remaining, yolo=args.yolo)
         if cmd is None:
             print(f"Error: resume not supported for {meta.source.title()} conversations (use handoff instead)")
             return
@@ -2051,7 +2063,7 @@ def main() -> None:
         print(f"Exported: {name} → {out_path}")
         message = f"Read the file {out_path.resolve()} for context from our last session, then summarize what we were working on and ask how to continue."
         target_agent = _handoff_agent(meta.source, args.handoff_agent or target_agent_from_handoff, args.yolo)
-        cmd = _handoff_cmd(target_agent, message, remaining, codex_yolo=args.yolo)
+        cmd = _handoff_cmd(target_agent, message, remaining, yolo=args.yolo)
         display = " ".join(cmd[:-1]) + f' "{message}"'
         print(f"  {display}")
         if args.dry_run:
@@ -2296,7 +2308,7 @@ def main() -> None:
         print(f"Exported: {name} → {out_path}")
         message = f"Read the file {out_path.resolve()} for context from our last session, then summarize what we were working on and ask how to continue."
         target_agent = _handoff_agent(meta.source, args.handoff_agent, args.yolo)
-        cmd = _handoff_cmd(target_agent, message, remaining, codex_yolo=args.yolo)
+        cmd = _handoff_cmd(target_agent, message, remaining, yolo=args.yolo)
         display = " ".join(cmd[:-1]) + f' "{message}"'
         print(f"  {display}")
         if meta.cwd and os.path.isdir(meta.cwd):

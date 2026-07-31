@@ -248,6 +248,41 @@ class FuzzyFinderTests(unittest.TestCase):
 
 
 class ResumeErgonomicsTests(unittest.TestCase):
+    def test_bare_resume_accepts_latest_pi_session(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp)
+            session_path = cwd / "pi-session.jsonl"
+            session_path.write_text("", encoding="utf-8")
+            meta = ConversationMeta(
+                path=session_path,
+                uuid="pi-session",
+                slug="session-pi",
+                timestamp="2026-07-15T10:00:00",
+                cwd=str(cwd),
+                preview="Pi session",
+                source="pi",
+            )
+            project = Project("pi:tmp", f"[pi] {cwd}", [meta])
+
+            old_argv = sys.argv
+            old_cwd = os.getcwd()
+            sys.argv = ["agentconvos", "--resume", "--dry-run"]
+            stream = io.StringIO()
+            try:
+                os.chdir(cwd)
+                with (
+                    patch("agentconvos.scanner.scan_projects", return_value=[project]),
+                    contextlib.redirect_stdout(stream),
+                    contextlib.redirect_stderr(stream),
+                ):
+                    app_module.main()
+            finally:
+                sys.argv = old_argv
+                os.chdir(old_cwd)
+
+        output = stream.getvalue()
+        self.assertIn("pi --session pi-session", output)
+
     def test_bare_resume_selects_latest_session_for_current_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
             cwd = Path(tmp)

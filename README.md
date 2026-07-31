@@ -64,6 +64,7 @@ agentconvos --list --json | jq '.projects[].conversations[].summary'
 agentconvos --resume                   # latest resumable session for cwd
 agentconvos --resume select            # choose a session for cwd
 agentconvos --resume <id>              # resume a specific session
+agentconvos --resume <id> --yolo       # explicitly bypass the target agent's permission prompts
 agentconvos --handoff                  # export context, start new session
 agentconvos --handoff select           # pick from list
 agentconvos --handoff codex            # latest Codex conversation
@@ -72,6 +73,10 @@ agentconvos --convo agy --handoff claude --yolo # hand off latest Agy conversati
 agentconvos --handoff --handoff-agent codex   # hand off latest conversation into Codex
 agentconvos --handoff --yolo           # hand off latest conversation to the same agent with no prompts
 ```
+
+Resume and handoff preserve each agent's normal permission behavior by default.
+`--yolo` is the explicit opt-in for agents that expose a no-prompt mode. Native
+resume is available for Claude Code, Codex, Pi, and Agy conversations.
 
 ### Export
 

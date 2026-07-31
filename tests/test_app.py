@@ -1,6 +1,7 @@
 import contextlib
 import io
 import json
+import inspect
 import os
 import sqlite3
 import sys
@@ -312,9 +313,72 @@ class ScannerCacheTests(unittest.TestCase):
 
 
 class HandoffCommandTests(unittest.TestCase):
+    def test_handoff_commands_are_safe_by_default(self):
+        self.assertEqual(
+            _handoff_cmd("codex", "handoff message"),
+            ["codex", "handoff message"],
+        )
+        self.assertEqual(
+            _handoff_cmd("claude", "handoff message"),
+            ["claude", "handoff message"],
+        )
+        self.assertEqual(
+            _handoff_cmd("agy", "handoff message"),
+            ["agy", "--prompt-interactive", "handoff message"],
+        )
+
+    def test_resume_commands_are_safe_by_default_and_include_pi(self):
+        self.assertEqual(
+            _resume_cmd("claude", "claude-session"),
+            ["claude", "-r", "claude-session"],
+        )
+        self.assertEqual(
+            _resume_cmd("codex", "codex-session"),
+            ["codex", "resume", "codex-session"],
+        )
+        self.assertEqual(
+            _resume_cmd("agy", "agy-session"),
+            ["agy", "--conversation", "agy-session"],
+        )
+        self.assertEqual(
+            _resume_cmd("pi", "pi-session"),
+            ["pi", "--session", "pi-session"],
+        )
+
+    def test_resume_yolo_is_explicit(self):
+        parameters = inspect.signature(_resume_cmd).parameters
+        self.assertIn("yolo", parameters)
+        self.assertEqual(
+            _resume_cmd("claude", "claude-session", yolo=True),
+            [
+                "claude",
+                "--dangerously-skip-permissions",
+                "-r",
+                "claude-session",
+            ],
+        )
+        self.assertEqual(
+            _resume_cmd("codex", "codex-session", yolo=True),
+            [
+                "codex",
+                "resume",
+                "--dangerously-bypass-approvals-and-sandbox",
+                "codex-session",
+            ],
+        )
+        self.assertEqual(
+            _resume_cmd("agy", "agy-session", yolo=True),
+            [
+                "agy",
+                "--dangerously-skip-permissions",
+                "--conversation",
+                "agy-session",
+            ],
+        )
+
     def test_codex_handoff_can_use_yolo(self):
         self.assertEqual(
-            _handoff_cmd("codex", "handoff message", codex_yolo=True),
+            _handoff_cmd("codex", "handoff message", yolo=True),
             ["codex", "--yolo", "handoff message"],
         )
 
@@ -505,11 +569,11 @@ class HandoffCommandTests(unittest.TestCase):
     def test_agy_handoff_and_resume_commands(self):
         self.assertEqual(
             _handoff_cmd("agy", "handoff message"),
-            ["agy", "--dangerously-skip-permissions", "--prompt-interactive", "handoff message"],
+            ["agy", "--prompt-interactive", "handoff message"],
         )
         self.assertEqual(
             _resume_cmd("agy", "abc123", ["--sandbox"]),
-            ["agy", "--dangerously-skip-permissions", "--sandbox", "--conversation", "abc123"],
+            ["agy", "--sandbox", "--conversation", "abc123"],
         )
 
 
