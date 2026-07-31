@@ -483,6 +483,26 @@ class ScannerCacheTests(unittest.TestCase):
         self.assertEqual(persisted["__version__"], 2)
 
 
+class CliMetadataTests(unittest.TestCase):
+    def test_version_prints_and_exits_without_starting_the_tui(self):
+        old_argv = sys.argv
+        sys.argv = ["agentconvos", "--version"]
+        stream = io.StringIO()
+        try:
+            with (
+                patch("agentconvos.app.ConvoExplorer.run") as run_tui,
+                contextlib.redirect_stdout(stream),
+            ):
+                with self.assertRaises(SystemExit) as raised:
+                    main()
+        finally:
+            sys.argv = old_argv
+
+        self.assertEqual(raised.exception.code, 0)
+        self.assertEqual(stream.getvalue().strip(), "agentconvos 0.1.0")
+        run_tui.assert_not_called()
+
+
 class HandoffCommandTests(unittest.TestCase):
     def test_handoff_commands_are_safe_by_default(self):
         self.assertEqual(

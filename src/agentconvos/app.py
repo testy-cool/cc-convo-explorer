@@ -1733,7 +1733,14 @@ def _resume_description(meta: ConversationMeta) -> str:
 
 def main() -> None:
     import argparse
+    from importlib.metadata import version as package_version
+
     parser = argparse.ArgumentParser(description="Browse and analyze Claude Code, Codex, Pi, Agy, and OpenCode conversations")
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {package_version('agentconvos')}",
+    )
     parser.add_argument("--analyze", nargs="+", metavar="ID_OR_PATH", help="Analyze conversations (JSONL paths, UUIDs, or slugs)")
     parser.add_argument("--concat", nargs="+", metavar="ID_OR_PATH", help="Export concatenated markdown (JSONL paths, UUIDs, or slugs)")
     parser.add_argument("--turns", metavar="ID_OR_PATH", help="Export one normalized conversation to stdout")
