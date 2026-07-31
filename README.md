@@ -25,6 +25,19 @@ agentconvos --context           # last 5 with summaries
 agentconvos --context --json    # structured, for piping to other tools
 ```
 
+### Agentic recall
+
+```bash
+agentconvos recall "Where did we decide how scraper fallbacks should work?"
+```
+
+`recall` searches the archive iteratively, opens only the promising conversation
+turns, reconciles conflicting evidence, and answers with source, date, session,
+turn, and project-path citations. The retrieval worker runs ephemerally in an
+isolated workspace, treats transcript instructions as untrusted data, and keeps
+its model and retrieval plumbing out of the caller-facing interface. It requires
+an installed and authenticated Codex CLI.
+
 ### Search
 
 ```bash

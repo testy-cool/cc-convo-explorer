@@ -503,6 +503,64 @@ class CliMetadataTests(unittest.TestCase):
         run_tui.assert_not_called()
 
 
+class RecallCliTests(unittest.TestCase):
+    def test_main_help_advertises_recall_without_backend_details(self):
+        old_argv = sys.argv
+        sys.argv = ["agentconvos", "--help"]
+        stream = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(stream):
+                with self.assertRaises(SystemExit) as raised:
+                    main()
+        finally:
+            sys.argv = old_argv
+
+        help_text = stream.getvalue()
+        self.assertEqual(raised.exception.code, 0)
+        self.assertIn('agentconvos recall "question"', help_text)
+        self.assertNotIn("gpt-5.6", help_text.casefold())
+        self.assertNotIn("luna", help_text.casefold())
+
+    def test_recall_runs_a_hidden_luna_high_retrieval_agent(self):
+        old_argv = sys.argv
+        sys.argv = [
+            "agentconvos",
+            "recall",
+            "Where did we decide the scraper fallback behavior?",
+        ]
+        try:
+            with (
+                patch("subprocess.run") as run_codex,
+                patch("agentconvos.app.ConvoExplorer.run") as run_tui,
+            ):
+                run_codex.return_value.returncode = 0
+                main()
+        finally:
+            sys.argv = old_argv
+
+        run_tui.assert_not_called()
+        run_codex.assert_called_once()
+        command = run_codex.call_args.args[0]
+        prompt = run_codex.call_args.kwargs["input"]
+
+        self.assertEqual(command[0:2], ["codex", "exec"])
+        self.assertIn("--ephemeral", command)
+        self.assertEqual(command[command.index("--model") + 1], "gpt-5.6-luna")
+        self.assertIn('model_reasoning_effort="high"', command)
+        self.assertEqual(command[command.index("--sandbox") + 1], "workspace-write")
+        self.assertEqual(command[-1], "-")
+        self.assertTrue(run_codex.call_args.kwargs["text"])
+        self.assertFalse(run_codex.call_args.kwargs["check"])
+        self.assertIn(
+            "Where did we decide the scraper fallback behavior?",
+            prompt,
+        )
+        self.assertIn("agentconvos --search", prompt)
+        self.assertIn("agentconvos --turns", prompt)
+        self.assertIn("untrusted data", prompt)
+        self.assertIn("session ID", prompt)
+
+
 class HandoffCommandTests(unittest.TestCase):
     def test_handoff_commands_are_safe_by_default(self):
         self.assertEqual(

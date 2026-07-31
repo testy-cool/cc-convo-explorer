@@ -1733,9 +1733,27 @@ def _resume_description(meta: ConversationMeta) -> str:
 
 def main() -> None:
     import argparse
+    import sys
     from importlib.metadata import version as package_version
 
-    parser = argparse.ArgumentParser(description="Browse and analyze Claude Code, Codex, Pi, Agy, and OpenCode conversations")
+    if len(sys.argv) > 1 and sys.argv[1] == "recall":
+        recall_parser = argparse.ArgumentParser(
+            prog="agentconvos recall",
+            description="Answer a question from evidence in your local conversation archive.",
+        )
+        recall_parser.add_argument("question", nargs="+", help="Question to investigate")
+        recall_args = recall_parser.parse_args(sys.argv[2:])
+        from .recall import run_recall
+
+        return_code = run_recall(" ".join(recall_args.question))
+        if return_code:
+            raise SystemExit(return_code)
+        return
+
+    parser = argparse.ArgumentParser(
+        description="Browse and analyze Claude Code, Codex, Pi, Agy, and OpenCode conversations",
+        epilog='Agentic archive recall: agentconvos recall "question"',
+    )
     parser.add_argument(
         "--version",
         action="version",
