@@ -38,8 +38,10 @@ _SOURCE_STYLE = {
     "pi": ("Pi", "bold #7c6fff"),
     "agy": ("Agy", "bold #00a3ff"),
     "opencode": ("OpenCode", "bold #ffaa00"),
+    "cmdmint": ("Cmdmint", "bold #a78bfa"),
 }
-_SOURCE_ORDER = ["claude", "codex", "pi", "agy", "opencode"]
+_SOURCE_ORDER = ["claude", "codex", "pi", "agy", "opencode", "cmdmint"]
+_RESUMABLE_SOURCES = frozenset(_SOURCE_ORDER)
 
 
 def _group_key(display_path: str, source: str) -> tuple[str, str]:
@@ -79,7 +81,7 @@ def _project_real_path(project: Project, convos: list[ConversationMeta] | None =
             if convo.cwd:
                 return convo.cwd
     display_path = project.display_path
-    for prefix in ("[codex] ", "[pi] ", "[agy] ", "[opencode] "):
+    for prefix in ("[codex] ", "[pi] ", "[agy] ", "[opencode] ", "[cmdmint] "):
         if display_path.startswith(prefix):
             return display_path[len(prefix):]
     return display_path
@@ -1404,7 +1406,7 @@ History appears immediately. Full-text results arrive live while indexing runs i
         if not self.current_meta:
             self.notify("Select a conversation first", severity="warning")
             return
-        if self.current_meta.source not in ("claude", "codex", "pi", "agy", "opencode"):
+        if self.current_meta.source not in _RESUMABLE_SOURCES:
             self.notify(f"Resume not supported for {self.current_meta.source.title()} conversations", severity="warning")
             return
         meta = self.current_meta
@@ -1711,6 +1713,8 @@ def _resume_cmd(
     if source == "opencode":
         permission_args = ["--auto"] if yolo else []
         return ["opencode"] + permission_args + extra + ["-s", uuid]
+    if source == "cmdmint":
+        return ["cmdmint", "ask", "--thread", uuid] + extra
     return None
 
 
@@ -1808,9 +1812,9 @@ def main() -> None:
                         help="Generate missing session summaries via Gemini (cron-friendly)")
     parser.add_argument("--json", action="store_true",
                         help="Output machine-readable JSON (use with --list, --search, --last, --context, --turns)")
-    parser.add_argument("--source", choices=["claude", "codex", "pi", "agy", "opencode"],
+    parser.add_argument("--source", choices=["claude", "codex", "pi", "agy", "opencode", "cmdmint"],
                         help="Filter by agent source")
-    parser.add_argument("--convo", choices=["claude", "codex", "pi", "agy", "opencode"],
+    parser.add_argument("--convo", choices=["claude", "codex", "pi", "agy", "opencode", "cmdmint"],
                         help="Conversation source to use, e.g. --convo agy --handoff codex --yolo")
     parser.add_argument("--after", metavar="DATE",
                         help="Only conversations after this date (YYYY-MM-DD)")
@@ -2060,7 +2064,7 @@ def main() -> None:
                 for c in project.conversations
                 if c.cwd
                 and os.path.realpath(c.cwd) == cwd
-                and c.source in ("claude", "codex", "pi", "agy", "opencode")
+                and c.source in _RESUMABLE_SOURCES
             ]
             cwd_convos.sort(key=lambda c: c.timestamp or "", reverse=True)
             if not cwd_convos:

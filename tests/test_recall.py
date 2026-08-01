@@ -2,9 +2,11 @@ import contextlib
 import inspect
 import io
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from agentconvos import recall
 
@@ -161,6 +163,24 @@ class RecallProgressTests(unittest.TestCase):
 
 
 class RecallStreamingTests(unittest.TestCase):
+    def test_cmdmint_stream_flag_forces_tty_only_while_enabled(self):
+        stream = io.StringIO()
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("CMDMINT_STREAM_TTY", None)
+            self.assertFalse(recall._is_tty(stream))
+
+            os.environ["CMDMINT_STREAM_TTY"] = "1"
+            self.assertTrue(recall._is_tty(stream))
+
+            os.environ["CMDMINT_STREAM_TTY"] = "0"
+            self.assertFalse(recall._is_tty(stream))
+
+    def test_recall_prompt_labels_cmdmint_answers_as_navigation_context(self):
+        prompt = recall._recall_prompt("What changed?", Path("/work/demo"))
+        self.assertIn("Cmdmint threads are prior retrieval transcripts", prompt)
+        self.assertIn("navigation", prompt.casefold())
+        self.assertIn("verify every material claim", prompt)
+
     def test_non_tty_stream_is_plain_and_stdout_contains_only_the_final_answer(self):
         signature = inspect.signature(recall.run_recall)
         self.assertIn("process_factory", signature.parameters)

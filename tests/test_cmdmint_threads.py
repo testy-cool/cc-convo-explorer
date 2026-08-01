@@ -1,10 +1,20 @@
+import contextlib
 import json
+import io
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from agentconvos.app import (
+    _RESUMABLE_SOURCES,
+    _SOURCE_ORDER,
+    _SOURCE_STYLE,
+    _resume_cmd,
+    main,
+)
 from agentconvos.parser import _detect_format, get_meta, parse_jsonl
 from agentconvos import scanner
 
@@ -123,6 +133,38 @@ class CmdmintThreadScannerTests(unittest.TestCase):
             ):
                 projects = scanner.scan_projects(source="cmdmint")
             self.assertEqual(projects, [])
+
+
+class CmdmintThreadAppTests(unittest.TestCase):
+    def test_cmdmint_is_a_first_class_source_and_resume_target(self):
+        self.assertEqual(
+            _resume_cmd("cmdmint", THREAD_ID),
+            ["cmdmint", "ask", "--thread", THREAD_ID],
+        )
+        self.assertEqual(_SOURCE_STYLE["cmdmint"], ("Cmdmint", "bold #a78bfa"))
+        self.assertIn("cmdmint", _SOURCE_ORDER)
+        self.assertIn("cmdmint", _RESUMABLE_SOURCES)
+
+        project = scanner.Project(
+            "cmdmint:/work/demo",
+            "[cmdmint] /work/demo",
+            [],
+        )
+        output = io.StringIO()
+        old_argv = sys.argv
+        sys.argv = ["agentconvos", "--source", "cmdmint", "--list", "--json"]
+        try:
+            with (
+                patch("agentconvos.scanner.scan_projects", return_value=[project]) as scan,
+                contextlib.redirect_stdout(output),
+            ):
+                main()
+        finally:
+            sys.argv = old_argv
+
+        scan.assert_called_once()
+        self.assertEqual(scan.call_args.kwargs["source"], "cmdmint")
+        self.assertEqual(json.loads(output.getvalue())["total_conversations"], 0)
 
 
 if __name__ == "__main__":
