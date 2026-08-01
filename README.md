@@ -1,6 +1,6 @@
 # agentconvos
 
-Discover, query, and browse AI coding agent conversations. Works with Claude Code, Codex, Pi, Agy, and OpenCode.
+Discover, query, and browse AI coding agent conversations. Works with Claude Code, Codex, Pi, Agy, OpenCode, and durable Cmdmint question threads.
 
 Use as a **CLI** (`agentconvos --context --json`), a **Python library** (`from agentconvos import scan_projects`), or an **interactive TUI** (`agentconvos`).
 
@@ -65,6 +65,7 @@ minutes once, after which only new or changed conversations are reindexed.
 agentconvos --find                    # open the fuzzy conversation picker
 agentconvos -f "auth reqid"           # start with a fuzzy query
 agentconvos -f --source codex         # limit the picker to one agent
+agentconvos -f --source cmdmint       # find durable cmdmint research threads
 ```
 
 This skips the Textual TUI and opens a lightweight `fzf` picker instead. It searches
@@ -80,6 +81,29 @@ agentconvos --list
 agentconvos --list --source codex --after 2026-05-01 --json
 agentconvos --list --json | jq '.projects[].conversations[].summary'
 ```
+
+### Durable Cmdmint question threads
+
+`cmdmint` publishes each completed ask as a JSONL conversation under
+`$CMDMINT_HOME/threads/*.jsonl` (default:
+`~/.local/share/cmdmint/threads`). Files are mode `0600`, and agentconvos
+indexes them as the first-class `cmdmint` source. The existing search index,
+fzf preview, JSON listing, and Textual tree work with these conversations:
+
+```bash
+agentconvos --source cmdmint --search "MCP selector" --json
+agentconvos --source cmdmint --list --json
+agentconvos --resume THREAD_ID --dry-run
+```
+
+The resume command for a Cmdmint thread is deliberately:
+`cmdmint ask --thread THREAD_ID`. It continues the logical research transcript
+and restores its stored scope; it does not resume the native Claude, Codex, Pi,
+Agy, or OpenCode session IDs cited in an answer. Use those native IDs with the
+corresponding provider resume command when you want the original agent session.
+Cmdmint threads use explicit UUIDs or the picker rather than a collision-prone
+global `last`, and prior Cmdmint answers are navigation context that must be
+verified against the underlying source conversations.
 
 ### Resume and handoff
 
@@ -99,7 +123,9 @@ agentconvos --handoff --yolo           # hand off latest conversation to the sam
 
 Resume and handoff preserve each agent's normal permission behavior by default.
 `--yolo` is the explicit opt-in for agents that expose a no-prompt mode. Native
-resume is available for Claude Code, Codex, Pi, Agy, and OpenCode conversations.
+resume is available for Claude Code, Codex, Pi, Agy, and OpenCode conversations;
+Cmdmint research threads use the explicit `cmdmint ask --thread` continuation
+path above and have no provider-specific `--yolo` flag.
 
 ### Export
 
@@ -154,7 +180,10 @@ stats = get_stats(projects[0].conversations[0].path)
 agentconvos
 ```
 
-Interactive tree grouped by agent (Claude Code, Codex, Pi, Agy, OpenCode) with search, multi-select, preview, export, and Gemini analysis.
+Interactive tree grouped by agent/source (Claude Code, Codex, Pi, Agy, OpenCode,
+Cmdmint) with search, multi-select, preview, export, and Gemini analysis. The
+`R` action continues Cmdmint threads through `cmdmint ask --thread`; it keeps
+native provider resume distinct.
 
 The history tree renders from cached metadata immediately. A persistent SQLite
 full-text index updates in the background, with progress shown in the lower-right
@@ -187,6 +216,7 @@ directory, full session ID, and command.
 | Pi logs | `~/.pi/agent/sessions/**/*.jsonl` |
 | Agy logs | `~/.gemini/antigravity-cli/history.jsonl`, `~/.gemini/antigravity-cli/conversations/*.db` |
 | OpenCode sessions | `~/.local/share/opencode/opencode.db` |
+| Cmdmint threads | `$CMDMINT_HOME/threads/*.jsonl` (default `~/.local/share/cmdmint/threads`) |
 | Full-text search index | `~/.claude/convo-explorer/search-index.sqlite3` |
 | Summaries | `~/.claude/convo-explorer/summaries/` |
 | Analyses | `~/.claude/convo-explorer/analyses/` |
