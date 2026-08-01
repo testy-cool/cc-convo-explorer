@@ -480,7 +480,7 @@ class ScannerCacheTests(unittest.TestCase):
             reloaded,
             {"/tmp/session.jsonl": {"uuid": "child-session"}},
         )
-        self.assertEqual(persisted["__version__"], 2)
+        self.assertEqual(persisted["__version__"], 3)
 
 
 class CliMetadataTests(unittest.TestCase):

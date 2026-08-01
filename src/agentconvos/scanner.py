@@ -10,7 +10,7 @@ from pathlib import Path
 from .parser import ConversationMeta, get_meta, list_opencode_metas
 
 _CACHE_PATH = Path(os.environ.get("USERPROFILE", Path.home())) / ".claude" / "convo-explorer" / "meta-cache.json"
-_CACHE_VERSION = 2
+_CACHE_VERSION = 3
 
 
 def _load_cache() -> dict:
@@ -110,6 +110,16 @@ def _opencode_db_path() -> Path:
     return user_home / ".local" / "share" / "opencode" / "opencode.db"
 
 
+def _cmdmint_threads_dir() -> Path:
+    root = Path(
+        os.environ.get(
+            "CMDMINT_HOME",
+            Path.home() / ".local" / "share" / "cmdmint",
+        )
+    ).expanduser()
+    return root / "threads"
+
+
 def _folder_to_path(folder_name: str) -> str:
     """Best-effort decode of folder name back to a path.
 
@@ -147,7 +157,7 @@ def scan_projects(
 
     Args:
         extra_dirs: Additional project directories to scan.
-        source: Filter by agent — "claude", "codex", "pi", "agy", or "opencode".
+        source: Filter by agent — "claude", "codex", "pi", "agy", "opencode", or "cmdmint".
         after: Only include conversations after this ISO date (e.g. "2026-05-01").
         before: Only include conversations before this ISO date.
     """
@@ -270,6 +280,29 @@ def scan_projects(
             projects.append(Project(
                 folder_name=folder,
                 display_path=f"[opencode] {cwd}",
+                conversations=convos,
+            ))
+
+    # Scan cmdmint durable ask threads — group by stored working directory.
+    cmdmint_base = _cmdmint_threads_dir()
+    if cmdmint_base.is_dir():
+        cmdmint_convos: list[ConversationMeta] = []
+        for jf in cmdmint_base.glob("*.jsonl"):
+            meta = _get_meta_cached(jf, cache)
+            if meta:
+                cmdmint_convos.append(meta)
+
+        by_cwd_cmdmint: dict[str, list[ConversationMeta]] = {}
+        for c in cmdmint_convos:
+            key = c.cwd or "(no project)"
+            by_cwd_cmdmint.setdefault(key, []).append(c)
+
+        for cwd, convos in by_cwd_cmdmint.items():
+            convos.sort(key=lambda c: c.timestamp, reverse=True)
+            folder = "cmdmint:" + (Path(cwd).name if cwd and cwd != "(no project)" else "misc")
+            projects.append(Project(
+                folder_name=folder,
+                display_path=f"[cmdmint] {cwd}",
                 conversations=convos,
             ))
 
