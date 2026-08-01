@@ -242,6 +242,7 @@ class CmdmintThreadTuiTests(unittest.IsolatedAsyncioTestCase):
             [codex_meta],
         )
         observed: list[dict[str, object]] = []
+        sync_sources: list[set[str]] = []
 
         def scan(**kwargs):
             observed.append(kwargs)
@@ -254,7 +255,9 @@ class CmdmintThreadTuiTests(unittest.IsolatedAsyncioTestCase):
                 return {}
 
             def sync(self, conversations, **_kwargs):
-                count = len(list(conversations))
+                conversations = list(conversations)
+                sync_sources.append({meta.source for meta in conversations})
+                count = len(conversations)
                 return SimpleNamespace(
                     total=count,
                     checked=count,
@@ -276,6 +279,13 @@ class CmdmintThreadTuiTests(unittest.IsolatedAsyncioTestCase):
                     return {meta.source for meta in metas}
             return set()
 
+        async def wait_for_sync(pilot, expected_count):
+            for _ in range(40):
+                if len(sync_sources) >= expected_count:
+                    return
+                await pilot.pause()
+            self.fail(f"expected {expected_count} index syncs, got {len(sync_sources)}")
+
         with patch.object(app_module, "scan_projects", side_effect=scan):
             filtered = app_module.ConvoExplorer(
                 source="cmdmint",
@@ -285,6 +295,8 @@ class CmdmintThreadTuiTests(unittest.IsolatedAsyncioTestCase):
             )
             async with filtered.run_test(size=(100, 32)) as pilot:
                 self.assertEqual(await conversation_sources(filtered, pilot), {"cmdmint"})
+                await wait_for_sync(pilot, 1)
+                self.assertEqual(sync_sources[0], {"cmdmint", "codex"})
 
             plain = app_module.ConvoExplorer(search_index=ReadyIndex())
             async with plain.run_test(size=(100, 32)) as pilot:
@@ -292,6 +304,8 @@ class CmdmintThreadTuiTests(unittest.IsolatedAsyncioTestCase):
                     await conversation_sources(plain, pilot),
                     {"cmdmint", "codex"},
                 )
+                await wait_for_sync(pilot, 2)
+                self.assertEqual(sync_sources[1], {"cmdmint", "codex"})
 
         self.assertIn(
             {

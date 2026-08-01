@@ -576,9 +576,17 @@ History appears immediately. Full-text results arrive live while indexing runs i
             for project in projects
             for conversation in project.conversations
         ]
+        index_conversations = conversations
+        if self._source or self._after or self._before:
+            complete_projects = scan_projects(extra_dirs=self._extra_dirs)
+            index_conversations = [
+                conversation
+                for project in complete_projects
+                for conversation in project.conversations
+            ]
         self._indexing = True
-        self._set_index_progress(IndexSyncStats(total=len(conversations)))
-        self.build_search_index(conversations)
+        self._set_index_progress(IndexSyncStats(total=len(index_conversations)))
+        self.build_search_index(index_conversations)
 
     @work(thread=True, exclusive=True, group="search-index")
     def build_search_index(self, conversations: list[ConversationMeta]) -> None:
