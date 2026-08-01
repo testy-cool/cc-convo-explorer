@@ -1752,7 +1752,11 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(
         description="Browse and analyze Claude Code, Codex, Pi, Agy, and OpenCode conversations",
-        epilog='Agentic archive recall: agentconvos recall "question"',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            'Commands:\n  recall "question"  Answer from evidence in the local conversation archive\n\n'
+            'Run: agentconvos recall "question"'
+        ),
     )
     parser.add_argument(
         "--version",

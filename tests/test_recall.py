@@ -1,0 +1,237 @@
+import contextlib
+import inspect
+import io
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+from agentconvos import recall
+
+
+def _event(event_type: str, item: dict | None = None, **extra: object) -> str:
+    payload: dict[str, object] = {"type": event_type, **extra}
+    if item is not None:
+        payload["item"] = item
+    return json.dumps(payload) + "\n"
+
+
+class _FakeStdin(io.StringIO):
+    def close(self) -> None:
+        self.captured = self.getvalue()
+        super().close()
+
+
+class _FakeProcess:
+    def __init__(self, events: list[str], returncode: int = 0):
+        self.stdin = _FakeStdin()
+        self.stdout = io.StringIO("".join(events))
+        self.returncode = returncode
+        self.terminated = False
+
+    def wait(self) -> int:
+        return self.returncode
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+
+class RecallCommandTests(unittest.TestCase):
+    def test_codex_command_requests_json_events_and_a_separate_final_answer(self):
+        parameters = inspect.signature(recall._recall_command).parameters
+        self.assertIn("answer_path", parameters)
+        if "answer_path" not in parameters:
+            return
+        command = recall._recall_command(
+            Path("/tmp/workspace"),
+            Path("/tmp/state"),
+            Path("/tmp/answer.md"),
+        )
+
+        self.assertIn("--json", command)
+        self.assertEqual(
+            command[command.index("--output-last-message") + 1],
+            "/tmp/answer.md",
+        )
+        self.assertEqual(command[-1], "-")
+
+
+class RecallProgressTests(unittest.TestCase):
+    def test_worker_commentary_does_not_pretend_synthesis_has_started(self):
+        progress = recall._RecallProgress("Where was it decided?")
+
+        progress.consume({"type": "thread.started", "thread_id": "thread-1"})
+        progress.consume(
+            {
+                "type": "item.completed",
+                "item": {
+                    "id": "message-1",
+                    "type": "agent_message",
+                    "text": "I’ll search alternate wording first.",
+                },
+            }
+        )
+
+        self.assertEqual(progress.stage, 0)
+        self.assertIn("planning", progress.latest.casefold())
+
+        progress.consume(
+            {
+                "type": "item.completed",
+                "item": {
+                    "id": "message-2",
+                    "type": "agent_message",
+                    "text": (
+                        "Found session 019e3993-458e-76b2-a543-e706db786ae7.\n\n"
+                        "Sources: Codex, turn 150"
+                    ),
+                },
+            }
+        )
+        self.assertEqual(progress.stage, 3)
+
+    def test_progress_tracks_real_searches_candidates_inspection_and_final_match(self):
+        progress_type = getattr(recall, "_RecallProgress", None)
+        self.assertIsNotNone(progress_type)
+        if progress_type is None:
+            return
+        now = [100.0]
+        progress = progress_type(
+            "Where was the MCP picker built?",
+            clock=lambda: now[0],
+        )
+        progress.consume(
+            {
+                "type": "item.started",
+                "item": {
+                    "id": "search-1",
+                    "type": "command_execution",
+                    "command": 'agentconvos --search "mcp picker" --json',
+                },
+            }
+        )
+        progress.consume(
+            {
+                "type": "item.completed",
+                "item": {
+                    "id": "search-1",
+                    "type": "command_execution",
+                    "command": 'agentconvos --search "mcp picker" --json',
+                    "aggregated_output": json.dumps(
+                        {
+                            "total_searched": 685,
+                            "hits": [
+                                {"uuid": "session-a"},
+                                {"uuid": "session-b"},
+                                {"uuid": "session-a"},
+                            ],
+                        }
+                    ),
+                },
+            }
+        )
+        progress.consume(
+            {
+                "type": "item.started",
+                "item": {
+                    "id": "turns-1",
+                    "type": "command_execution",
+                    "command": "agentconvos --turns session-a --json",
+                },
+            }
+        )
+        now[0] = 112.0
+        progress.finish(
+            "Found session 019e3993-458e-76b2-a543-e706db786ae7 in "
+            "/home/testycool/Work/context-backup/claude-memory-doctor",
+            succeeded=True,
+        )
+
+        rendered = progress.render_text()
+        self.assertIn("CONVERSATION RECALL", rendered)
+        self.assertIn("SEARCHES  1", rendered)
+        self.assertIn("CANDIDATES  3", rendered)
+        self.assertIn("SESSIONS  2", rendered)
+        self.assertIn("INSPECTED  1", rendered)
+        self.assertIn("00:12", rendered)
+        self.assertIn("019e3993-458e-76b2-a543-e706db786ae7", rendered)
+        self.assertIn("claude-memory-doctor", rendered)
+        self.assertNotIn("gpt-5.6", rendered.casefold())
+        self.assertNotIn("luna", rendered.casefold())
+
+
+class RecallStreamingTests(unittest.TestCase):
+    def test_non_tty_stream_is_plain_and_stdout_contains_only_the_final_answer(self):
+        signature = inspect.signature(recall.run_recall)
+        self.assertIn("process_factory", signature.parameters)
+        self.assertIn("state_dir", signature.parameters)
+        self.assertIn("stdout", signature.parameters)
+        self.assertIn("stderr", signature.parameters)
+        if "process_factory" not in signature.parameters:
+            return
+
+        events = [
+            _event("thread.started", thread_id="thread-1"),
+            _event(
+                "item.started",
+                {
+                    "id": "item-1",
+                    "type": "command_execution",
+                    "command": 'agentconvos --search "mcp picker" --json',
+                },
+            ),
+            _event(
+                "item.completed",
+                {
+                    "id": "item-1",
+                    "type": "command_execution",
+                    "command": 'agentconvos --search "mcp picker" --json',
+                    "aggregated_output": json.dumps(
+                        {"total_searched": 685, "hits": [{"uuid": "session-a"}]}
+                    ),
+                    "exit_code": 0,
+                    "status": "completed",
+                },
+            ),
+            _event(
+                "item.completed",
+                {"id": "item-2", "type": "agent_message", "text": "fallback"},
+            ),
+            _event("turn.completed", usage={"output_tokens": 10}),
+        ]
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        created: list[_FakeProcess] = []
+
+        def process_factory(command: list[str], **kwargs: object) -> _FakeProcess:
+            answer_path = Path(command[command.index("--output-last-message") + 1])
+            answer_path.write_text("The matched conversation.\n\nSources: session-a\n")
+            process = _FakeProcess(events)
+            created.append(process)
+            self.assertEqual(kwargs["stderr"], -2)
+            return process
+
+        with tempfile.TemporaryDirectory(prefix="agentconvos-recall-test-") as temporary:
+            exit_code = recall.run_recall(
+                "Where was the MCP picker built?",
+                origin=Path(temporary),
+                process_factory=process_factory,
+                state_dir=Path(temporary) / "state",
+                stdout=stdout,
+                stderr=stderr,
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            stdout.getvalue(),
+            "The matched conversation.\n\nSources: session-a\n",
+        )
+        self.assertIn("Searching archive", stderr.getvalue())
+        self.assertNotIn("thread.started", stderr.getvalue())
+        self.assertNotIn("\x1b[", stderr.getvalue())
+        self.assertEqual(len(created), 1)
+        self.assertIn("untrusted data", created[0].stdin.captured)
+
+
+if __name__ == "__main__":
+    unittest.main()

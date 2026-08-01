@@ -517,6 +517,7 @@ class RecallCliTests(unittest.TestCase):
 
         help_text = stream.getvalue()
         self.assertEqual(raised.exception.code, 0)
+        self.assertIn("Commands:", help_text)
         self.assertIn('agentconvos recall "question"', help_text)
         self.assertNotIn("gpt-5.6", help_text.casefold())
         self.assertNotIn("luna", help_text.casefold())
@@ -530,35 +531,17 @@ class RecallCliTests(unittest.TestCase):
         ]
         try:
             with (
-                patch("subprocess.run") as run_codex,
+                patch("agentconvos.recall.run_recall", return_value=0) as run_recall,
                 patch("agentconvos.app.ConvoExplorer.run") as run_tui,
             ):
-                run_codex.return_value.returncode = 0
                 main()
         finally:
             sys.argv = old_argv
 
         run_tui.assert_not_called()
-        run_codex.assert_called_once()
-        command = run_codex.call_args.args[0]
-        prompt = run_codex.call_args.kwargs["input"]
-
-        self.assertEqual(command[0:2], ["codex", "exec"])
-        self.assertIn("--ephemeral", command)
-        self.assertEqual(command[command.index("--model") + 1], "gpt-5.6-luna")
-        self.assertIn('model_reasoning_effort="high"', command)
-        self.assertEqual(command[command.index("--sandbox") + 1], "workspace-write")
-        self.assertEqual(command[-1], "-")
-        self.assertTrue(run_codex.call_args.kwargs["text"])
-        self.assertFalse(run_codex.call_args.kwargs["check"])
-        self.assertIn(
-            "Where did we decide the scraper fallback behavior?",
-            prompt,
+        run_recall.assert_called_once_with(
+            "Where did we decide the scraper fallback behavior?"
         )
-        self.assertIn("agentconvos --search", prompt)
-        self.assertIn("agentconvos --turns", prompt)
-        self.assertIn("untrusted data", prompt)
-        self.assertIn("session ID", prompt)
 
 
 class HandoffCommandTests(unittest.TestCase):

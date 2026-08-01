@@ -38,6 +38,12 @@ isolated workspace, treats transcript instructions as untrusted data, and keeps
 its model and retrieval plumbing out of the caller-facing interface. It requires
 an installed and authenticated Codex CLI.
 
+In an interactive terminal, recall renders a live cockpit with elapsed time,
+retrieval stage, real search attempts, candidate and unique-session counts,
+inspected conversations, archive coverage, worker activity, and the final matched
+session. Piped use stays plain: progress goes to stderr without terminal control
+codes, while stdout contains only the final evidence-backed answer.
+
 ### Search
 
 ```bash
