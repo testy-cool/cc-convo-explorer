@@ -459,10 +459,16 @@ class ConvoExplorer(App):
         self,
         extra_dirs: list[Path] | None = None,
         search_index: ConversationSearchIndex | None = None,
+        source: str | None = None,
+        after: str | None = None,
+        before: str | None = None,
     ) -> None:
         super().__init__()
         self.projects: list[Project] = []
         self._extra_dirs = extra_dirs
+        self._source = source
+        self._after = after
+        self._before = before
         self.current_meta: ConversationMeta | None = None
         self._dragging_sidebar = False
         self._model_index = 0
@@ -547,7 +553,12 @@ History appears immediately. Full-text results arrive live while indexing runs i
 
     @work(thread=True)
     def load_projects(self) -> None:
-        projects = scan_projects(extra_dirs=self._extra_dirs)
+        projects = scan_projects(
+            extra_dirs=self._extra_dirs,
+            source=self._source,
+            after=self._after,
+            before=self._before,
+        )
         self.call_from_thread(self._projects_loaded, projects)
 
     def _projects_loaded(self, projects: list[Project]) -> None:
@@ -2354,7 +2365,7 @@ def main() -> None:
         print(f"\nDone. {done} processed, {skipped} already cached.")
         raise SystemExit(0)
 
-    app = ConvoExplorer(extra_dirs=_extra_dirs)
+    app = ConvoExplorer(**_scan_kwargs)
     app.run()
 
     # After TUI exits, check if user wants to resume a conversation
