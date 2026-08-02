@@ -29,7 +29,7 @@ def _thread_lines(thread_id: str = THREAD_ID) -> list[str]:
     return [
         json.dumps(
             {
-                "type": "cmdmint_thread",
+                "type": "clihow_thread",
                 "schemaVersion": 1,
                 "id": thread_id,
                 "title": "Find the MCP selector conversation",
@@ -59,17 +59,17 @@ def _thread_lines(thread_id: str = THREAD_ID) -> list[str]:
     ]
 
 
-class CmdmintThreadParserTests(unittest.TestCase):
-    def test_parser_reads_cmdmint_metadata_and_turns(self):
+class ClihowThreadParserTests(unittest.TestCase):
+    def test_parser_reads_clihow_metadata_and_turns(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / f"{THREAD_ID}.jsonl"
             path.write_text("\n".join(_thread_lines()) + "\n", encoding="utf-8")
 
-            self.assertEqual(_detect_format(path), "cmdmint")
+            self.assertEqual(_detect_format(path), "clihow")
             meta = get_meta(path)
             self.assertIsNotNone(meta)
             assert meta is not None
-            self.assertEqual(meta.source, "cmdmint")
+            self.assertEqual(meta.source, "clihow")
             self.assertEqual(meta.uuid, THREAD_ID)
             self.assertEqual(meta.cwd, "/work/demo")
             self.assertEqual(meta.slug, "Find the MCP selector conversation")
@@ -100,8 +100,8 @@ class CmdmintThreadParserTests(unittest.TestCase):
             )
 
 
-class CmdmintThreadScannerTests(unittest.TestCase):
-    def test_scanner_uses_cmdmint_home_groups_by_cwd_and_filters_source(self):
+class ClihowThreadScannerTests(unittest.TestCase):
+    def test_scanner_uses_clihow_home_groups_by_cwd_and_filters_source(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             threads = root / "threads"
@@ -109,53 +109,53 @@ class CmdmintThreadScannerTests(unittest.TestCase):
             thread_path = threads / f"{THREAD_ID}.jsonl"
             thread_path.write_text("\n".join(_thread_lines()) + "\n", encoding="utf-8")
             cache_path = root / "meta-cache.json"
-            with patch.dict(os.environ, {"CMDMINT_HOME": str(root)}, clear=False), patch.object(
+            with patch.dict(os.environ, {"CLIHOW_HOME": str(root)}, clear=False), patch.object(
                 scanner, "_CACHE_PATH", cache_path
             ):
-                projects = scanner.scan_projects(source="cmdmint")
+                projects = scanner.scan_projects(source="clihow")
 
                 self.assertEqual(len(projects), 1)
-                self.assertEqual(projects[0].display_path, "[cmdmint] /work/demo")
+                self.assertEqual(projects[0].display_path, "[clihow] /work/demo")
                 self.assertEqual([c.uuid for p in projects for c in p.conversations], [THREAD_ID])
-                self.assertEqual(projects[0].conversations[0].source, "cmdmint")
-                self.assertEqual(scanner._cmdmint_threads_dir(), threads)
+                self.assertEqual(projects[0].conversations[0].source, "clihow")
+                self.assertEqual(scanner._clihow_threads_dir(), threads)
 
                 codex_projects = scanner.scan_projects(source="codex")
                 self.assertFalse(
                     any(c.uuid == THREAD_ID for p in codex_projects for c in p.conversations)
                 )
 
-    def test_scanner_ignores_malformed_cmdmint_files(self):
+    def test_scanner_ignores_malformed_clihow_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             threads = root / "threads"
             threads.mkdir()
             (threads / f"{THREAD_ID}.jsonl").write_text("not-json\n", encoding="utf-8")
-            with patch.dict(os.environ, {"CMDMINT_HOME": str(root)}, clear=False), patch.object(
+            with patch.dict(os.environ, {"CLIHOW_HOME": str(root)}, clear=False), patch.object(
                 scanner, "_CACHE_PATH", root / "cache.json"
             ):
-                projects = scanner.scan_projects(source="cmdmint")
+                projects = scanner.scan_projects(source="clihow")
             self.assertEqual(projects, [])
 
 
-class CmdmintThreadAppTests(unittest.TestCase):
-    def test_cmdmint_is_a_first_class_source_and_resume_target(self):
+class ClihowThreadAppTests(unittest.TestCase):
+    def test_clihow_is_a_first_class_source_and_resume_target(self):
         self.assertEqual(
-            _resume_cmd("cmdmint", THREAD_ID),
-            ["cmdmint", "ask", "--thread", THREAD_ID],
+            _resume_cmd("clihow", THREAD_ID),
+            ["clihow", "ask", "--thread", THREAD_ID],
         )
-        self.assertEqual(_SOURCE_STYLE["cmdmint"], ("Cmdmint", "bold #a78bfa"))
-        self.assertIn("cmdmint", _SOURCE_ORDER)
-        self.assertIn("cmdmint", _RESUMABLE_SOURCES)
+        self.assertEqual(_SOURCE_STYLE["clihow"], ("Clihow", "bold #a78bfa"))
+        self.assertIn("clihow", _SOURCE_ORDER)
+        self.assertIn("clihow", _RESUMABLE_SOURCES)
 
         project = scanner.Project(
-            "cmdmint:/work/demo",
-            "[cmdmint] /work/demo",
+            "clihow:/work/demo",
+            "[clihow] /work/demo",
             [],
         )
         output = io.StringIO()
         old_argv = sys.argv
-        sys.argv = ["agentconvos", "--source", "cmdmint", "--list", "--json"]
+        sys.argv = ["agentconvos", "--source", "clihow", "--list", "--json"]
         try:
             with (
                 patch("agentconvos.scanner.scan_projects", return_value=[project]) as scan,
@@ -166,7 +166,7 @@ class CmdmintThreadAppTests(unittest.TestCase):
             sys.argv = old_argv
 
         scan.assert_called_once()
-        self.assertEqual(scan.call_args.kwargs["source"], "cmdmint")
+        self.assertEqual(scan.call_args.kwargs["source"], "clihow")
         self.assertEqual(json.loads(output.getvalue())["total_conversations"], 0)
 
     def test_main_passes_source_and_date_filters_to_the_textual_app(self):
@@ -186,7 +186,7 @@ class CmdmintThreadAppTests(unittest.TestCase):
         sys.argv = [
             "agentconvos",
             "--source",
-            "cmdmint",
+            "clihow",
             "--after",
             "2026-07-01",
             "--before",
@@ -202,25 +202,25 @@ class CmdmintThreadAppTests(unittest.TestCase):
             observed,
             {
                 "extra_dirs": None,
-                "source": "cmdmint",
+                "source": "clihow",
                 "after": "2026-07-01",
                 "before": "2026-08-01",
             },
         )
 
 
-class CmdmintThreadTuiTests(unittest.IsolatedAsyncioTestCase):
+class ClihowThreadTuiTests(unittest.IsolatedAsyncioTestCase):
     async def test_textual_app_applies_source_filter_and_plain_mode_keeps_all_sources(self):
         self.assertIn("source", inspect.signature(app_module.ConvoExplorer).parameters)
 
-        cmdmint_meta = ConversationMeta(
-            path=Path("/tmp/cmdmint-thread.jsonl"),
+        clihow_meta = ConversationMeta(
+            path=Path("/tmp/clihow-thread.jsonl"),
             uuid="019f0000-0000-7000-8000-000000000010",
-            slug="cmdmint-thread",
+            slug="clihow-thread",
             timestamp="2026-08-01T00:00:00.000Z",
             cwd="/work/demo",
-            preview="Cmdmint result",
-            source="cmdmint",
+            preview="Clihow result",
+            source="clihow",
         )
         codex_meta = ConversationMeta(
             path=Path("/tmp/codex-thread.jsonl"),
@@ -231,10 +231,10 @@ class CmdmintThreadTuiTests(unittest.IsolatedAsyncioTestCase):
             preview="Codex result",
             source="codex",
         )
-        cmdmint_project = scanner.Project(
-            "cmdmint:demo",
-            "[cmdmint] /work/demo",
-            [cmdmint_meta],
+        clihow_project = scanner.Project(
+            "clihow:demo",
+            "[clihow] /work/demo",
+            [clihow_meta],
         )
         codex_project = scanner.Project(
             "codex:demo",
@@ -246,9 +246,9 @@ class CmdmintThreadTuiTests(unittest.IsolatedAsyncioTestCase):
 
         def scan(**kwargs):
             observed.append(kwargs)
-            if kwargs.get("source") == "cmdmint":
-                return [cmdmint_project]
-            return [cmdmint_project, codex_project]
+            if kwargs.get("source") == "clihow":
+                return [clihow_project]
+            return [clihow_project, codex_project]
 
         class ReadyIndex:
             def search(self, _query):
@@ -288,29 +288,29 @@ class CmdmintThreadTuiTests(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(app_module, "scan_projects", side_effect=scan):
             filtered = app_module.ConvoExplorer(
-                source="cmdmint",
+                source="clihow",
                 after="2026-07-01",
                 before="2026-08-01",
                 search_index=ReadyIndex(),
             )
             async with filtered.run_test(size=(100, 32)) as pilot:
-                self.assertEqual(await conversation_sources(filtered, pilot), {"cmdmint"})
+                self.assertEqual(await conversation_sources(filtered, pilot), {"clihow"})
                 await wait_for_sync(pilot, 1)
-                self.assertEqual(sync_sources[0], {"cmdmint", "codex"})
+                self.assertEqual(sync_sources[0], {"clihow", "codex"})
 
             plain = app_module.ConvoExplorer(search_index=ReadyIndex())
             async with plain.run_test(size=(100, 32)) as pilot:
                 self.assertEqual(
                     await conversation_sources(plain, pilot),
-                    {"cmdmint", "codex"},
+                    {"clihow", "codex"},
                 )
                 await wait_for_sync(pilot, 2)
-                self.assertEqual(sync_sources[1], {"cmdmint", "codex"})
+                self.assertEqual(sync_sources[1], {"clihow", "codex"})
 
         self.assertIn(
             {
                 "extra_dirs": None,
-                "source": "cmdmint",
+                "source": "clihow",
                 "after": "2026-07-01",
                 "before": "2026-08-01",
             },

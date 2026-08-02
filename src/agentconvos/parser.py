@@ -1,4 +1,4 @@
-"""Parse Claude Code, Codex, Pi, Agy, OpenCode, and cmdmint conversations."""
+"""Parse Claude Code, Codex, Pi, Agy, OpenCode, and clihow conversations."""
 
 from __future__ import annotations
 
@@ -55,7 +55,7 @@ class ConversationMeta:
     cwd: str
     preview: str  # first user message, truncated
     turn_count: int = 0
-    source: str = "claude"  # "claude", "codex", "pi", "agy", "opencode", or "cmdmint"
+    source: str = "claude"  # "claude", "codex", "pi", "agy", "opencode", or "clihow"
     git_branch: str = ""
 
 
@@ -129,11 +129,11 @@ def _detect_format(path: Path) -> str:
             rec = json.loads(first_line)
             if (
                 isinstance(rec, dict)
-                and rec.get("type") == "cmdmint_thread"
+                and rec.get("type") == "clihow_thread"
                 and rec.get("schemaVersion") == 1
                 and isinstance(rec.get("id"), str)
             ):
-                return "cmdmint"
+                return "clihow"
             if rec.get("type") == "session" and "version" in rec:
                 return "pi"
             if rec.get("type") == "session_meta" or (
@@ -173,8 +173,8 @@ def get_meta(path: Path) -> ConversationMeta | None:
         return _get_meta_agy(path)
     if fmt == "opencode":
         return _get_meta_opencode(path)
-    if fmt == "cmdmint":
-        return _get_meta_cmdmint(path)
+    if fmt == "clihow":
+        return _get_meta_clihow(path)
     return _get_meta_claude(path)
 
 
@@ -204,8 +204,8 @@ def _get_meta_claude(path: Path) -> ConversationMeta | None:
     return None
 
 
-def _get_meta_cmdmint(path: Path) -> ConversationMeta | None:
-    """Extract metadata from a cmdmint durable ask-thread JSONL."""
+def _get_meta_clihow(path: Path) -> ConversationMeta | None:
+    """Extract metadata from a clihow durable ask-thread JSONL."""
     try:
         with open(path, "r", encoding="utf-8") as f:
             first_line = f.readline()
@@ -215,7 +215,7 @@ def _get_meta_cmdmint(path: Path) -> ConversationMeta | None:
             if not isinstance(metadata, dict):
                 return None
             if (
-                metadata.get("type") != "cmdmint_thread"
+                metadata.get("type") != "clihow_thread"
                 or metadata.get("schemaVersion") != 1
                 or not isinstance(metadata.get("id"), str)
             ):
@@ -244,7 +244,7 @@ def _get_meta_cmdmint(path: Path) -> ConversationMeta | None:
                 timestamp=metadata.get("updatedAt", "") if isinstance(metadata.get("updatedAt"), str) else "",
                 cwd=metadata.get("cwd", "") if isinstance(metadata.get("cwd"), str) else "",
                 preview=preview or title[:120],
-                source="cmdmint",
+                source="clihow",
             )
     except (json.JSONDecodeError, OSError):
         return None
@@ -749,8 +749,8 @@ def parse_jsonl(path: Path, detail: str = DETAIL_TEXT, last_n: int = 0) -> list[
         turns = _parse_db_agy(path, detail)
     elif fmt == "opencode":
         turns = _parse_db_opencode(path, detail)
-    elif fmt == "cmdmint":
-        turns = _parse_jsonl_cmdmint(path)
+    elif fmt == "clihow":
+        turns = _parse_jsonl_clihow(path)
     else:
         turns = _parse_jsonl_claude(path, detail)
     if last_n > 0:
@@ -758,8 +758,8 @@ def parse_jsonl(path: Path, detail: str = DETAIL_TEXT, last_n: int = 0) -> list[
     return turns
 
 
-def _parse_jsonl_cmdmint(path: Path) -> list[Turn]:
-    """Parse cmdmint's metadata-plus-message JSONL into normalized turns."""
+def _parse_jsonl_clihow(path: Path) -> list[Turn]:
+    """Parse clihow's metadata-plus-message JSONL into normalized turns."""
     turns: list[Turn] = []
     try:
         with open(path, "r", encoding="utf-8") as f:

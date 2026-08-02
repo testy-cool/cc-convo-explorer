@@ -38,9 +38,9 @@ _SOURCE_STYLE = {
     "pi": ("Pi", "bold #7c6fff"),
     "agy": ("Agy", "bold #00a3ff"),
     "opencode": ("OpenCode", "bold #ffaa00"),
-    "cmdmint": ("Cmdmint", "bold #a78bfa"),
+    "clihow": ("Clihow", "bold #a78bfa"),
 }
-_SOURCE_ORDER = ["claude", "codex", "pi", "agy", "opencode", "cmdmint"]
+_SOURCE_ORDER = ["claude", "codex", "pi", "agy", "opencode", "clihow"]
 _RESUMABLE_SOURCES = frozenset(_SOURCE_ORDER)
 
 
@@ -81,7 +81,7 @@ def _project_real_path(project: Project, convos: list[ConversationMeta] | None =
             if convo.cwd:
                 return convo.cwd
     display_path = project.display_path
-    for prefix in ("[codex] ", "[pi] ", "[agy] ", "[opencode] ", "[cmdmint] "):
+    for prefix in ("[codex] ", "[pi] ", "[agy] ", "[opencode] ", "[clihow] "):
         if display_path.startswith(prefix):
             return display_path[len(prefix):]
     return display_path
@@ -1732,8 +1732,8 @@ def _resume_cmd(
     if source == "opencode":
         permission_args = ["--auto"] if yolo else []
         return ["opencode"] + permission_args + extra + ["-s", uuid]
-    if source == "cmdmint":
-        return ["cmdmint", "ask", "--thread", uuid] + extra
+    if source == "clihow":
+        return ["clihow", "ask", "--thread", uuid] + extra
     return None
 
 
@@ -1831,9 +1831,9 @@ def main() -> None:
                         help="Generate missing session summaries via Gemini (cron-friendly)")
     parser.add_argument("--json", action="store_true",
                         help="Output machine-readable JSON (use with --list, --search, --last, --context, --turns)")
-    parser.add_argument("--source", choices=["claude", "codex", "pi", "agy", "opencode", "cmdmint"],
+    parser.add_argument("--source", choices=["claude", "codex", "pi", "agy", "opencode", "clihow"],
                         help="Filter by agent source")
-    parser.add_argument("--convo", choices=["claude", "codex", "pi", "agy", "opencode", "cmdmint"],
+    parser.add_argument("--convo", choices=["claude", "codex", "pi", "agy", "opencode", "clihow"],
                         help="Conversation source to use, e.g. --convo agy --handoff codex --yolo")
     parser.add_argument("--after", metavar="DATE",
                         help="Only conversations after this date (YYYY-MM-DD)")
