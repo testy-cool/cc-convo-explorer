@@ -34,6 +34,7 @@ class ConversationStats:
     duration_ms: int = 0
     tool_calls: int = 0
     api_errors: int = 0
+    effort: str = ""
 
     @property
     def cost_estimate(self) -> float:
@@ -303,8 +304,9 @@ def _codex_timestamp_from_rollout_stem(stem: str) -> str:
 def _is_codex_context_block(text: str) -> bool:
     stripped = text.strip()
     return stripped.startswith((
-        "# AGENTS.md instructions for ",
+        "# AGENTS.md instructions",
         "<environment_context>",
+        "<recommended_plugins>",
         "<permissions instructions>",
         "<collaboration_mode>",
         "<apps_instructions>",
@@ -1604,6 +1606,8 @@ def _get_stats_claude(path: Path) -> ConversationStats:
                 msg = rec.get("message", {})
                 if not stats.model and isinstance(msg, dict):
                     stats.model = msg.get("model", "")
+                if not stats.effort:
+                    stats.effort = str(rec.get("effort", "") or "")
                 usage = msg.get("usage", {}) if isinstance(msg, dict) else {}
                 stats.input_tokens += usage.get("input_tokens", 0)
                 stats.output_tokens += usage.get("output_tokens", 0)
@@ -1644,6 +1648,15 @@ def _get_stats_codex(path: Path) -> ConversationStats:
             if rtype == "turn_context":
                 if not stats.model:
                     stats.model = payload.get("model", "")
+                if not stats.effort:
+                    collaboration = payload.get("collaboration_mode", {})
+                    settings = collaboration.get("settings", {}) if isinstance(collaboration, dict) else {}
+                    stats.effort = str(
+                        payload.get("effort")
+                        or payload.get("reasoning_effort")
+                        or settings.get("reasoning_effort")
+                        or ""
+                    )
 
             elif rtype == "event_msg":
                 ptype = payload.get("type", "")
@@ -1671,6 +1684,7 @@ def _get_stats_codex_json(path: Path) -> ConversationStats:
     with open(path, "r", encoding="utf-8") as f:
         rec = json.load(f)
     stats.model = rec.get("model", "")
+    stats.effort = str(rec.get("effort") or rec.get("reasoning_effort") or "")
     for item in rec.get("items", []):
         if not isinstance(item, dict):
             continue
@@ -1699,7 +1713,9 @@ def _get_stats_pi(path: Path) -> ConversationStats:
 
             rtype = rec.get("type", "")
 
-            if rtype == "message":
+            if rtype == "thinking_level_change":
+                stats.effort = str(rec.get("thinkingLevel", "") or "")
+            elif rtype == "message":
                 msg = rec.get("message", {})
                 role = msg.get("role", "")
                 if role == "assistant":

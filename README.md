@@ -21,9 +21,23 @@ Without Gemini analysis: drop `[ai]`. Requires Python 3.12+.
 ```bash
 agentconvos --last              # most recent conversation for cwd
 agentconvos --last 3            # last 3
-agentconvos --context           # last 5 with summaries
-agentconvos --context --json    # structured, for piping to other tools
+agentconvos --context           # last 5 per agent, with fast catch-up details
+agentconvos --context --json    # structured full messages for piping to agents
 ```
+
+`--context` is the quick answer to “what was last discussed in this folder?” For
+each coding-agent source it shows up to five recent conversations with their date,
+turn count, model and effort, first user message, latest user message, latest agent
+message, and cached summary. Terminal output keeps long messages to short one-line
+excerpts; JSON preserves their complete normalized text. `--last N` remains the
+compact chronological view across all sources.
+
+Generate or refresh the cached one-sentence summaries with `agentconvos --summarize`.
+Each summary uses the complete normalized conversation in two Gemini passes: the first
+builds a factual recap, and the second verifies and compresses it. The second request
+extends the complete first request unchanged so sufficiently large sessions are eligible
+for Gemini's implicit prompt caching. Cache files from the older final-five-turn pipeline
+are regenerated automatically.
 
 ### Agentic recall
 

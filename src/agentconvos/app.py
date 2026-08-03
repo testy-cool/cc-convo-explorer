@@ -1828,7 +1828,7 @@ def main() -> None:
     parser.add_argument("--export-all", metavar="DIR", help="Export every conversation as individual markdown files to DIR")
     parser.add_argument("--projects-dir", nargs="+", metavar="DIR", help="Additional projects directories to scan (e.g. copied from other machines)")
     parser.add_argument("--summarize", action="store_true",
-                        help="Generate missing session summaries via Gemini (cron-friendly)")
+                        help="Generate missing or stale two-pass session summaries via Gemini")
     parser.add_argument("--json", action="store_true",
                         help="Output machine-readable JSON (use with --list, --search, --last, --context, --turns)")
     parser.add_argument("--source", choices=["claude", "codex", "pi", "agy", "opencode", "clihow"],
@@ -1842,7 +1842,7 @@ def main() -> None:
     parser.add_argument("--last", nargs="?", const=1, type=int, metavar="N",
                         help="Show last N conversations for current directory (default: 1)")
     parser.add_argument("--context", action="store_true",
-                        help="Quick project digest: recent session summaries for cwd")
+                        help="Quick project digest: last 5 sessions per agent with catch-up details")
     args, remaining = parser.parse_known_args()
 
     if args.source and args.convo and args.source != args.convo:
@@ -2029,8 +2029,17 @@ def main() -> None:
                 print(f"No conversations found for {cwd}")
             return
 
-        n = args.last if args.last is not None else min(5, len(cwd_convos))
-        selected = cwd_convos[:n]
+        if args.context:
+            selected = []
+            selected_per_source: dict[str, int] = {}
+            for conversation in cwd_convos:
+                source_count = selected_per_source.get(conversation.source, 0)
+                if source_count >= 5:
+                    continue
+                selected.append(conversation)
+                selected_per_source[conversation.source] = source_count + 1
+        else:
+            selected = cwd_convos[:args.last]
 
         def _convo_record(c):
             size = _conversation_size(c.path)
@@ -2044,31 +2053,74 @@ def main() -> None:
                 "size_bytes": size,
                 "estimated_tokens": size // 4,
             }
+            if args.context:
+                turns = parse_jsonl(c.path, detail=DETAIL_TEXT)
+                stats = get_stats(c.path)
+                first_user = next((turn.text for turn in turns if turn.role == "user"), "")
+                last_user = next(
+                    (turn.text for turn in reversed(turns) if turn.role == "user"),
+                    "",
+                )
+                last_agent = next(
+                    (turn.text for turn in reversed(turns) if turn.role == "assistant"),
+                    "",
+                )
+                rec.update({
+                    "turn_count": len(turns),
+                    "model": stats.model,
+                    "effort": getattr(stats, "effort", ""),
+                    "first_message": first_user,
+                    "last_user_message": last_user,
+                    "last_agent_message": last_agent,
+                })
             if c.git_branch:
                 rec["git_branch"] = c.git_branch
             return rec
+
+        records = [_convo_record(conversation) for conversation in selected]
 
         if args.json:
             print(_json.dumps({
                 "project": cwd,
                 "total_for_project": len(cwd_convos),
                 "showing": len(selected),
-                "conversations": [_convo_record(c) for c in selected],
+                "conversations": records,
             }, indent=2))
         else:
             label = "Context" if args.context else "Last"
             print(f"\n{label} for {cwd} ({len(cwd_convos)} total):\n")
-            for c in selected:
-                ts = _fmt_ts(c.timestamp)
-                name = c.slug or c.uuid[:8]
-                summary = summaries.get(c.uuid, "")
-                src = c.source
-                size = _conversation_size(c.path)
-                tokens = size // 4
-                tok_str = f"{tokens // 1000}K" if tokens >= 1000 else str(tokens)
-                print(f"  {ts}  [{src}]  {name}  ~{tok_str} tok")
-                if summary:
-                    print(f"           {summary}")
+            if args.context:
+                def _excerpt(text: str, limit: int = 280) -> str:
+                    compact = " ".join(text.split())
+                    return compact if len(compact) <= limit else compact[:limit - 1].rstrip() + "…"
+
+                for record in records:
+                    name = record["slug"] or record["uuid"][:8]
+                    model = record["model"] or "?"
+                    effort = record["effort"] or "?"
+                    print(
+                        f"  [{record['source']}]  {_fmt_ts(record['timestamp'])}  {name}"
+                        f"  · {record['turn_count']} turns"
+                        f"  · model={model}  · effort={effort}"
+                    )
+                    if record["summary"]:
+                        print(f"    Summary: {_excerpt(record['summary'])}")
+                    print(f"    First:   {_excerpt(record['first_message']) or '(none)'}")
+                    print(f"    You:     {_excerpt(record['last_user_message']) or '(none)'}")
+                    print(f"    Agent:   {_excerpt(record['last_agent_message']) or '(none)'}")
+                    print()
+            else:
+                for c in selected:
+                    ts = _fmt_ts(c.timestamp)
+                    name = c.slug or c.uuid[:8]
+                    summary = summaries.get(c.uuid, "")
+                    src = c.source
+                    size = _conversation_size(c.path)
+                    tokens = size // 4
+                    tok_str = f"{tokens // 1000}K" if tokens >= 1000 else str(tokens)
+                    print(f"  {ts}  [{src}]  {name}  ~{tok_str} tok")
+                    if summary:
+                        print(f"           {summary}")
         return
 
     if args.resume is not None:

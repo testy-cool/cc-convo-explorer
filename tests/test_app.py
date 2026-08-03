@@ -13,7 +13,7 @@ from unittest.mock import patch
 import agentconvos.parser as parser_module
 import agentconvos.scanner as scanner_module
 from agentconvos.app import _handoff_agent, _handoff_cmd, _resume_cmd, main
-from agentconvos.parser import ConversationMeta, ConversationStats, SearchHit, get_meta, parse_jsonl
+from agentconvos.parser import ConversationMeta, ConversationStats, SearchHit, Turn, get_meta, parse_jsonl
 from agentconvos.scanner import Project, scan_projects
 
 
@@ -202,6 +202,33 @@ def _write_opencode_db(path: Path) -> None:
 
 
 class CodexParserTests(unittest.TestCase):
+    def test_stats_include_codex_reasoning_effort(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "rollout-session.jsonl"
+            records = [
+                {
+                    "type": "session_meta",
+                    "payload": {
+                        "id": "session-id",
+                        "timestamp": "2026-08-03T10:00:00Z",
+                        "cwd": str(path.parent),
+                    },
+                },
+                {
+                    "type": "turn_context",
+                    "payload": {"model": "gpt-test", "effort": "xhigh"},
+                },
+            ]
+            path.write_text(
+                "\n".join(json.dumps(record) for record in records),
+                encoding="utf-8",
+            )
+
+            stats = parser_module.get_stats(path)
+
+        self.assertEqual(stats.model, "gpt-test")
+        self.assertEqual(getattr(stats, "effort", ""), "xhigh")
+
     def test_text_parser_excludes_injected_project_instructions(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "rollout-session.jsonl"
@@ -254,6 +281,65 @@ class CodexParserTests(unittest.TestCase):
             [
                 ("user", "What changed in the release?"),
                 ("assistant", "The release changed the retry behavior."),
+            ],
+        )
+
+    def test_text_parser_excludes_bootstrap_plugin_and_agents_blocks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "rollout-session.jsonl"
+            records = [
+                {
+                    "type": "session_meta",
+                    "payload": {
+                        "id": "session-id",
+                        "timestamp": "2026-08-03T10:00:00Z",
+                        "cwd": str(path.parent),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_text",
+                                "text": "<recommended_plugins>bootstrap catalog</recommended_plugins>",
+                            },
+                            {
+                                "type": "input_text",
+                                "text": "# AGENTS.md instructions\n\n<INSTRUCTIONS>bootstrap</INSTRUCTIONS>",
+                            },
+                        ],
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "user_message",
+                        "message": "Show the actual project context.",
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "agent_message",
+                        "message": "Here is the actual context.",
+                    },
+                },
+            ]
+            path.write_text(
+                "\n".join(json.dumps(record) for record in records),
+                encoding="utf-8",
+            )
+
+            turns = parse_jsonl(path)
+
+        self.assertEqual(
+            [(turn.role, turn.text) for turn in turns],
+            [
+                ("user", "Show the actual project context."),
+                ("assistant", "Here is the actual context."),
             ],
         )
 
@@ -347,6 +433,34 @@ class CodexParserTests(unittest.TestCase):
 
 
 class ClaudeParserTests(unittest.TestCase):
+    def test_stats_include_claude_effort(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "claude-session.jsonl"
+            records = [
+                {
+                    "type": "user",
+                    "message": {"role": "user", "content": "Inspect effort"},
+                },
+                {
+                    "type": "assistant",
+                    "effort": "medium",
+                    "message": {
+                        "role": "assistant",
+                        "model": "claude-test",
+                        "content": [{"type": "text", "text": "Done"}],
+                    },
+                },
+            ]
+            path.write_text(
+                "\n".join(json.dumps(record) for record in records),
+                encoding="utf-8",
+            )
+
+            stats = parser_module.get_stats(path)
+
+        self.assertEqual(stats.model, "claude-test")
+        self.assertEqual(getattr(stats, "effort", ""), "medium")
+
     def test_text_parser_excludes_local_command_metadata(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "claude-session.jsonl"
@@ -407,6 +521,36 @@ class ClaudeParserTests(unittest.TestCase):
                 ("assistant", "The retry behavior is unchanged."),
             ],
         )
+
+
+class PiStatsTests(unittest.TestCase):
+    def test_stats_include_pi_thinking_level(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "pi-session.jsonl"
+            records = [
+                {"type": "session", "version": 1},
+                {
+                    "type": "thinking_level_change",
+                    "thinkingLevel": "high",
+                },
+                {
+                    "type": "message",
+                    "message": {
+                        "role": "assistant",
+                        "model": "pi-test",
+                        "content": [{"type": "text", "text": "Done"}],
+                    },
+                },
+            ]
+            path.write_text(
+                "\n".join(json.dumps(record) for record in records),
+                encoding="utf-8",
+            )
+
+            stats = parser_module.get_stats(path)
+
+        self.assertEqual(stats.model, "pi-test")
+        self.assertEqual(getattr(stats, "effort", ""), "high")
 
 
 class OpenCodeParserTests(unittest.TestCase):
@@ -1013,6 +1157,161 @@ class SearchCliTests(unittest.TestCase):
         self.assertEqual(FakeIndex.instance.searched, ("indexed result", [meta]))
         self.assertEqual(payload["hits"][0]["uuid"], "indexed-session")
         self.assertEqual(payload["hits"][0]["turn_index"], 2)
+
+
+class ContextCliTests(unittest.TestCase):
+    def test_context_defaults_to_five_conversations_per_agent_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            conversations = []
+            for source in ("codex", "claude"):
+                for index in range(6):
+                    path = root / f"{source}-{index}.jsonl"
+                    path.write_text("session", encoding="utf-8")
+                    conversations.append(
+                        ConversationMeta(
+                            path=path,
+                            uuid=f"{source}-{index}",
+                            slug=f"{source}-{index}",
+                            timestamp=f"2026-08-{index + 1:02d}T10:00:00Z",
+                            cwd=str(root),
+                            preview=f"First {source} message {index}",
+                            source=source,
+                        )
+                    )
+            project = Project("context", str(root), conversations)
+
+            old_argv = sys.argv
+            old_cwd = Path.cwd()
+            sys.argv = ["agentconvos", "--context", "--json"]
+            stream = io.StringIO()
+            try:
+                os.chdir(root)
+                with (
+                    patch("agentconvos.scanner.scan_projects", return_value=[project]),
+                    patch("agentconvos.summarize.load_summaries", return_value={}),
+                    contextlib.redirect_stdout(stream),
+                ):
+                    main()
+            finally:
+                os.chdir(old_cwd)
+                sys.argv = old_argv
+
+        payload = json.loads(stream.getvalue())
+        selected_sources = [record["source"] for record in payload["conversations"]]
+        self.assertEqual(selected_sources.count("codex"), 5)
+        self.assertEqual(selected_sources.count("claude"), 5)
+
+    def test_context_json_includes_fast_catchup_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "codex.jsonl"
+            path.write_text("session", encoding="utf-8")
+            meta = ConversationMeta(
+                path=path,
+                uuid="codex-context",
+                slug="context-session",
+                timestamp="2026-08-03T10:00:00Z",
+                cwd=str(root),
+                preview="First request",
+                source="codex",
+            )
+            turns = [
+                Turn("user", "First request"),
+                Turn("assistant", "Initial response"),
+                Turn("user", "Latest user follow-up"),
+                Turn("assistant", "Latest agent response"),
+            ]
+            stats = ConversationStats(model="gpt-test")
+            stats.effort = "xhigh"
+
+            old_argv = sys.argv
+            old_cwd = Path.cwd()
+            sys.argv = ["agentconvos", "--context", "--json"]
+            stream = io.StringIO()
+            try:
+                os.chdir(root)
+                with (
+                    patch(
+                        "agentconvos.scanner.scan_projects",
+                        return_value=[Project("context", str(root), [meta])],
+                    ),
+                    patch(
+                        "agentconvos.summarize.load_summaries",
+                        return_value={meta.uuid: "Cached session recap"},
+                    ),
+                    patch("agentconvos.app.parse_jsonl", return_value=turns),
+                    patch("agentconvos.app.get_stats", return_value=stats),
+                    contextlib.redirect_stdout(stream),
+                ):
+                    main()
+            finally:
+                os.chdir(old_cwd)
+                sys.argv = old_argv
+
+        record = json.loads(stream.getvalue())["conversations"][0]
+        self.assertEqual(record.get("turn_count"), 4)
+        self.assertEqual(record.get("model"), "gpt-test")
+        self.assertEqual(record.get("effort"), "xhigh")
+        self.assertEqual(record.get("first_message"), "First request")
+        self.assertEqual(record.get("last_user_message"), "Latest user follow-up")
+        self.assertEqual(record.get("last_agent_message"), "Latest agent response")
+
+    def test_context_text_is_a_scannable_conversation_recap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "codex.jsonl"
+            path.write_text("session", encoding="utf-8")
+            meta = ConversationMeta(
+                path=path,
+                uuid="codex-context",
+                slug="context-session",
+                timestamp="2026-08-03T10:00:00Z",
+                cwd=str(root),
+                preview="First request",
+                source="codex",
+            )
+            turns = [
+                Turn("user", "First request"),
+                Turn("assistant", "Initial response"),
+                Turn("user", "Latest user follow-up"),
+                Turn("assistant", "Latest agent response"),
+            ]
+            stats = ConversationStats(model="gpt-test", effort="xhigh")
+
+            old_argv = sys.argv
+            old_cwd = Path.cwd()
+            sys.argv = ["agentconvos", "--context"]
+            stream = io.StringIO()
+            try:
+                os.chdir(root)
+                with (
+                    patch(
+                        "agentconvos.scanner.scan_projects",
+                        return_value=[Project("context", str(root), [meta])],
+                    ),
+                    patch(
+                        "agentconvos.summarize.load_summaries",
+                        return_value={meta.uuid: "Cached session recap"},
+                    ),
+                    patch("agentconvos.app.parse_jsonl", return_value=turns),
+                    patch("agentconvos.app.get_stats", return_value=stats),
+                    contextlib.redirect_stdout(stream),
+                ):
+                    main()
+            finally:
+                os.chdir(old_cwd)
+                sys.argv = old_argv
+
+        output = stream.getvalue()
+        self.assertIn("[codex]  2026-08-03 10:00", output)
+        self.assertIn("4 turns", output)
+        self.assertIn("model=gpt-test", output)
+        self.assertIn("effort=xhigh", output)
+        self.assertIn("Summary: Cached session recap", output)
+        self.assertIn("First:   First request", output)
+        self.assertIn("You:     Latest user follow-up", output)
+        self.assertIn("Agent:   Latest agent response", output)
 
 
 class AgyConversationTests(unittest.TestCase):
