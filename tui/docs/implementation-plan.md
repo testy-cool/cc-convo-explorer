@@ -10,7 +10,7 @@ Deliver a real-data, browse/detail AgentConvos workspace whose geometry, keyboar
 - Installed stack: Bubble Tea `2.0.8`, Bubbles `2.1.1`, Lip Gloss `2.0.5`, Glamour `2.0.1`; all imports remain `charm.land/.../v2`.
 - `loadContext` already consumes `agentconvos --context --json` (or `AGENTCONVOS_BACKEND`) before launching the TUI.
 - Scope is browse/detail, focus, scrolling, and local Bubbles filtering only.
-- Review terminals are tmux/private PTY at `136x65` and `90x30`; minimum is `72x18`.
+- Review terminals are tmux/private PTY at `136x65`, the reported `106x30` medium pane, and `90x30`; minimum is `72x18`.
 - No mouse capture, animation, background work, subprocess handoff, or new adapters are needed.
 
 ## Primary user flow
@@ -73,16 +73,17 @@ There are no custom async messages in this thin slice.
 
 - Chrome: header `1`, footer `1`, body `height - 2`.
 - Wide `136x65`: browse pane about `44`, one-cell separator, detail receives the remainder; body height `63`.
+- Medium `106x30`: browse pane `42`, one-cell separator, detail uses two-cell horizontal reading insets; body height `28`.
 - Compact `90x30`: browse pane about `34`, one-cell separator, detail receives the remainder; body height `28`.
 - Pane children use the exact assigned width. There is no parent horizontal padding that can make a delegate’s declared width wrap.
-- Browse body: pane heading `1`, search row `1`, list gets `body - 2`.
-- Detail body: pane heading `1`, viewport gets `body - 1`.
+- Browse body: pane heading `1`, search row `1`, list gets `body - 2`; delegates reserve three rows for up to two humanized title lines and metadata.
+- Detail body: pane heading `1`, viewport gets `body - 1` inside a two-cell horizontal reading inset.
 - Too-small `<72x18`: exact-size resize view, preserving state for the next resize.
 
 ## Visual system
 
 - Qualities: calm, confident, warm, purposeful. Anti-goals: cyber-console, sterile dump, rainbow/border soup.
-- Balanced density with two-line rows and one-cell grouping rhythm.
+- Balanced density with three-cell rows, wrapped titles, stable adjacent metadata, and one-cell grouping rhythm.
 - Central roles: canvas, panel, raised surface, text, muted, border/separator, accent, selected, inactive-selected, match, status, error.
 - Focus: accent pane-title rail plus footer word. Selection: full-row background. Inactive selection: quieter full-row background. Match: amber query treatment. Status: sage scroll label plus text.
 - One vertical separator; no rounded boxes around both panes, decorative logo, or animation.
@@ -107,10 +108,10 @@ There are no custom async messages in this thin slice.
 ## Tests and review evidence
 
 - Preserve the existing failing delegate-height/footer geometry tests and observe red then green.
-- Add red tests for `Shift+Tab`, Ctrl+C-only exit, search selection restoration, duplicate-message omission, exact `136x65`/`90x30` geometry, and too-small rendering.
+- Add red tests for `Shift+Tab`, Ctrl+C-only exit, search selection restoration, duplicate-message omission, exact `136x65`/`106x30`/`90x30` geometry, wrapped/humanized rows, reading insets, and too-small rendering.
 - Keep existing tests for contextual help, list/detail routing, complete tail access, Bubbles filtering, full-width selection, and Glamour Markdown.
 - Run gofmt, vet, `go test -p 1 ./...`, build, and a capped serialized race pass if practical.
-- Walk through real backend data in private PTYs at both review dimensions and inspect captured screens.
+- Walk through real backend data in private PTYs at all review dimensions and inspect captured screens.
 - Complete `docs/review-checklist.md` and `docs/aesthetic-ergonomic-scorecard.md`; target at least `20/24` with no zero.
 
 ## Acceptance criteria

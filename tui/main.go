@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"unicode"
 
 	"charm.land/bubbles/v2/help"
 	"charm.land/bubbles/v2/key"
@@ -45,17 +46,14 @@ type conversationItem struct {
 }
 
 func (item conversationItem) Title() string {
-	if strings.TrimSpace(item.conversation.Slug) != "" {
-		return item.conversation.Slug
-	}
-	return compact(item.conversation.FirstMessage, 120)
+	return conversationTitle(item.conversation)
 }
 
 func (item conversationItem) Description() string {
 	c := item.conversation
 	return strings.Join(nonEmpty(
-		shortDate(c.Timestamp),
 		strings.ToLower(c.Source),
+		shortDate(c.Timestamp),
 		turnLabel(c.TurnCount),
 	), " · ")
 }
@@ -70,8 +68,8 @@ type conversationDelegate struct {
 	focused bool
 }
 
-func (d conversationDelegate) Height() int  { return 2 }
-func (d conversationDelegate) Spacing() int { return 1 }
+func (d conversationDelegate) Height() int  { return 3 }
+func (d conversationDelegate) Spacing() int { return 0 }
 func (d conversationDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd {
 	return nil
 }
@@ -92,10 +90,12 @@ func (d conversationDelegate) Render(w io.Writer, m list.Model, index int, raw l
 
 	titleStyle := lipgloss.NewStyle().
 		Width(rowWidth).
-		Foreground(d.colors.text)
+		Foreground(d.colors.text).
+		Background(d.colors.panel)
 	metaStyle := lipgloss.NewStyle().
 		Width(rowWidth).
-		Foreground(d.colors.muted)
+		Foreground(d.colors.muted).
+		Background(d.colors.panel)
 	if selected {
 		selection := d.colors.selectionInactive
 		if d.focused {
@@ -106,13 +106,21 @@ func (d conversationDelegate) Render(w io.Writer, m list.Model, index int, raw l
 		metaStyle = metaStyle.Background(selection)
 	}
 
-	title := marker + compact(item.Title(), textWidth)
+	titleLines := wrappedLines(item.Title(), textWidth, 2)
+	lines := make([]string, 0, d.Height())
+	for _, titleLine := range titleLines {
+		lines = append(lines, titleStyle.Render(marker+titleLine))
+	}
 	metadata := marker + compact(item.Description(), textWidth)
-	_, _ = io.WriteString(w, titleStyle.Render(title)+"\n"+metaStyle.Render(metadata))
+	lines = append(lines, metaStyle.Render(metadata))
+	for len(lines) < d.Height() {
+		lines = append(lines, metaStyle.Render(marker))
+	}
+	_, _ = io.WriteString(w, strings.Join(lines, "\n"))
 }
 
 var whitespace = regexp.MustCompile(`\s+`)
-var markdownDecoration = regexp.MustCompile("[*_`~]")
+var markdownDecoration = regexp.MustCompile("[*`~]")
 var markdownLink = regexp.MustCompile(`\[([^]]+)]\([^)]+\)`)
 
 type palette struct {
@@ -439,19 +447,22 @@ func (m *model) resize() {
 func (m model) layout() paneLayout {
 	gap := 1
 	leftOuter := 44
-	if m.width < 110 {
+	if m.width < 100 {
 		leftOuter = max(32, m.width*38/100)
+	} else if m.width < 124 {
+		leftOuter = max(40, m.width*40/100)
 	} else if m.width > 150 {
 		leftOuter = min(48, m.width*32/100)
 	}
-	leftOuter = min(leftOuter, max(1, m.width-gap-36))
+	leftOuter = min(leftOuter, max(1, m.width-gap-40))
 	rightOuter := max(1, m.width-gap-leftOuter)
+	rightInset := 2
 	bodyHeight := max(6, m.height-2)
 	return paneLayout{
 		leftOuter:    leftOuter,
 		rightOuter:   rightOuter,
 		leftContent:  leftOuter,
-		rightContent: rightOuter,
+		rightContent: max(1, rightOuter-rightInset*2),
 		bodyHeight:   bodyHeight,
 		paneContent:  bodyHeight,
 	}
@@ -529,22 +540,28 @@ func (m *model) refreshPreview() {
 		return
 	}
 
-	title := editorialTitle(c, max(8, m.preview.Width()))
-	identity := strings.Join(nonEmpty(strings.ToLower(c.Source), shortID(c.UUID)), " · ")
-	metadata := strings.Join(nonEmpty(date(c.Timestamp), turnLabel(c.TurnCount)), " · ")
+	title := readingTitle(c)
+	metadata := strings.Join(nonEmpty(
+		strings.ToLower(c.Source),
+		editorialDate(c.Timestamp),
+		turnLabel(c.TurnCount),
+		shortID(c.UUID),
+	), " · ")
 	technical := strings.Join(nonEmpty(c.Model, c.Effort), " · ")
+	firstMessage := c.FirstMessage
+	if titleCarriesOpening(title, firstMessage, max(8, m.preview.Width()-2)) {
+		firstMessage = ""
+	}
 	latestUser := c.LastUserMessage
 	if strings.TrimSpace(latestUser) == strings.TrimSpace(c.FirstMessage) {
 		latestUser = ""
 	}
 
 	parts := nonEmpty(
-		lipgloss.NewStyle().Bold(true).Foreground(m.colors.text).Render(title),
-		lipgloss.NewStyle().Foreground(m.colors.muted).Render(strings.Join(nonEmpty(identity, metadata), "  ")),
-		lipgloss.NewStyle().Foreground(m.colors.match).Render(technical),
-		m.markdownSection("First message", c.FirstMessage),
-		m.markdownSection("Your latest message", latestUser),
-		m.markdownSection("Agent's latest reply", c.LastAgentMessage),
+		m.readingHeader(title, metadata, technical),
+		m.markdownSection("OPENING MESSAGE", firstMessage),
+		m.markdownSection("LATEST USER MESSAGE", latestUser),
+		m.markdownSection("LATEST REPLY", c.LastAgentMessage),
 	)
 	m.preview.SetContent(strings.Join(parts, "\n\n"))
 	m.preview.GotoTop()
@@ -566,7 +583,14 @@ func (m model) View() tea.View {
 		Height(layout.bodyHeight).
 		Background(m.colors.panel).
 		Render(m.listView(layout.leftContent))
-	rightContent := m.paneHeading("Conversation", m.focus == detailFocus, layout.rightContent) + "\n" + m.preview.View()
+	reader := lipgloss.NewStyle().
+		Width(layout.rightOuter).
+		Height(max(1, layout.bodyHeight-1)).
+		PaddingLeft(2).
+		PaddingRight(2).
+		Background(m.colors.canvas).
+		Render(m.preview.View())
+	rightContent := m.paneHeading("Conversation detail", m.focus == detailFocus, layout.rightOuter) + "\n" + reader
 	right := lipgloss.NewStyle().
 		Width(layout.rightOuter).
 		Height(layout.bodyHeight).
@@ -644,7 +668,7 @@ func (m model) header() string {
 
 func (m model) listView(width int) string {
 	return strings.Join([]string{
-		m.paneHeading("Recent", m.focus == browseFocus, width),
+		m.paneHeading("Recent conversations", m.focus == browseFocus, width),
 		m.searchView(width),
 		m.conversations.View(),
 	}, "\n")
@@ -746,9 +770,45 @@ func (m model) markdownSection(label, text string) string {
 	if strings.TrimSpace(text) == "" {
 		return ""
 	}
-	heading := lipgloss.NewStyle().Bold(true).Foreground(m.colors.muted).Render(label)
+	headingStyle := lipgloss.NewStyle().Bold(true).Foreground(m.colors.accent)
+	heading := headingStyle.Render(label)
+	ruleWidth := max(0, m.preview.Width()-lipgloss.Width(label)-1)
+	if ruleWidth > 0 {
+		rule := lipgloss.NewStyle().Foreground(m.colors.separator).Render(strings.Repeat("─", ruleWidth))
+		heading += " " + rule
+	}
 	content := m.renderMarkdown(text)
 	return heading + "\n" + content
+}
+
+func (m model) readingHeader(title, metadata, technical string) string {
+	width := max(1, m.preview.Width())
+	contentWidth := max(1, width-2)
+	background := m.colors.raised
+	titleStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(m.colors.text).
+		Background(background)
+	metaStyle := lipgloss.NewStyle().
+		Foreground(m.colors.muted).
+		Background(background)
+	technicalStyle := lipgloss.NewStyle().
+		Foreground(m.colors.match).
+		Background(background)
+
+	lines := []string{titleStyle.Render(strings.Join(wrappedLines(title, contentWidth, 2), "\n"))}
+	if metadata != "" {
+		lines = append(lines, metaStyle.Render(metadata))
+	}
+	if technical != "" {
+		lines = append(lines, technicalStyle.Render(technical))
+	}
+	return lipgloss.NewStyle().
+		Width(width).
+		PaddingLeft(1).
+		PaddingRight(1).
+		Background(background).
+		Render(strings.Join(lines, "\n"))
 }
 
 func (m model) renderMarkdown(markdown string) string {
@@ -816,11 +876,21 @@ func terminalColor(value color.Color) string {
 	return fmt.Sprintf("#%02X%02X%02X", uint8(r>>8), uint8(g>>8), uint8(b>>8))
 }
 
-func editorialTitle(c conversation, width int) string {
-	if strings.TrimSpace(c.Slug) != "" {
-		return compact(c.Slug, width)
+func conversationTitle(c conversation) string {
+	for _, candidate := range []string{c.Slug, c.Summary, c.FirstMessage} {
+		if title := firstTextLine(candidate); title != "" {
+			return humanizeTitle(title)
+		}
 	}
-	for _, line := range strings.Split(c.FirstMessage, "\n") {
+	return "No recorded prompt"
+}
+
+func readingTitle(c conversation) string {
+	return conversationTitle(c)
+}
+
+func firstTextLine(value string) string {
+	for _, line := range strings.Split(value, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -828,9 +898,91 @@ func editorialTitle(c conversation, width int) string {
 		line = strings.TrimSpace(strings.TrimLeft(line, "#"))
 		line = markdownLink.ReplaceAllString(line, "$1")
 		line = markdownDecoration.ReplaceAllString(line, "")
-		return compact(line, width)
+		return whitespace.ReplaceAllString(line, " ")
 	}
-	return "(no recorded prompt)"
+	return ""
+}
+
+func humanizeTitle(value string) string {
+	value = strings.TrimSpace(value)
+	lower := strings.ToLower(value)
+	delegated := false
+	if strings.HasPrefix(lower, "[delegated task]") {
+		delegated = true
+		value = strings.TrimSpace(value[len("[delegated task]"):])
+	}
+	lower = strings.ToLower(value)
+	if strings.HasSuffix(lower, "(prompt not recorded)") {
+		value = strings.TrimSpace(value[:len(value)-len("(prompt not recorded)")])
+	}
+	if delegated {
+		value = strings.ReplaceAll(value, "_", " ")
+	} else {
+		value = strings.Trim(value, "_")
+	}
+	value = whitespace.ReplaceAllString(value, " ")
+	words := strings.Fields(value)
+	acronyms := map[string]string{
+		"api": "API", "cli": "CLI", "json": "JSON", "readme": "README",
+		"sdk": "SDK", "ssh": "SSH", "tui": "TUI", "ui": "UI", "url": "URL",
+	}
+	for index, word := range words {
+		if acronym, ok := acronyms[strings.ToLower(word)]; ok {
+			words[index] = acronym
+		}
+	}
+	value = strings.Join(words, " ")
+	if value == "" {
+		return "No recorded prompt"
+	}
+	runes := []rune(value)
+	runes[0] = unicode.ToUpper(runes[0])
+	return string(runes)
+}
+
+func titleCarriesOpening(title, opening string, width int) bool {
+	opening = strings.TrimSpace(opening)
+	if opening == "" || strings.Contains(opening, "\n") {
+		return false
+	}
+	plain := firstTextLine(opening)
+	if plain != title {
+		return false
+	}
+	return len(wrappedLines(title, width, 3)) <= 2
+}
+
+func wrappedLines(value string, width, limit int) []string {
+	value = whitespace.ReplaceAllString(strings.TrimSpace(value), " ")
+	if value == "" {
+		return []string{"No recorded prompt"}
+	}
+	width = max(1, width)
+	lines := strings.Split(lipgloss.Wrap(value, width, " -_/"), "\n")
+	truncated := len(lines) > limit
+	if truncated {
+		lines = lines[:limit]
+	}
+	for index, line := range lines {
+		lines[index] = truncateCells(strings.TrimSpace(line), width)
+	}
+	if truncated && len(lines) > 0 {
+		last := len(lines) - 1
+		lines[last] = strings.TrimRight(truncateCells(lines[last], max(1, width-1)), "… ") + "…"
+	}
+	return lines
+}
+
+func truncateCells(value string, width int) string {
+	width = max(1, width)
+	if lipgloss.Width(value) <= width {
+		return value
+	}
+	runes := []rune(value)
+	for len(runes) > 0 && lipgloss.Width(string(runes)+"…") > width {
+		runes = runes[:len(runes)-1]
+	}
+	return strings.TrimRight(string(runes), " ") + "…"
 }
 
 func shortDate(timestamp string) string {
@@ -849,23 +1001,20 @@ func shortDate(timestamp string) string {
 	return timestamp[8:10] + " " + month
 }
 
+func editorialDate(timestamp string) string {
+	short := shortDate(timestamp)
+	if short == "" || len(timestamp) < 4 {
+		return ""
+	}
+	return short + " " + timestamp[:4]
+}
+
 func compact(value string, width int) string {
 	value = whitespace.ReplaceAllString(strings.TrimSpace(value), " ")
 	if value == "" {
-		return "(no recorded prompt)"
+		return "No recorded prompt"
 	}
-	if len([]rune(value)) <= width {
-		return value
-	}
-	runes := []rune(value)
-	return string(runes[:max(1, width-1)]) + "…"
-}
-
-func date(timestamp string) string {
-	if len(timestamp) >= 10 {
-		return timestamp[:10]
-	}
-	return ""
+	return truncateCells(value, width)
 }
 
 func shortID(id string) string {

@@ -8,7 +8,7 @@ Let a developer orient to the current project, find a recent coding-agent conver
 
 - Primary user: a developer reviewing recent Codex, Claude, Pi, Agy, OpenCode, or Clihow work.
 - Host: standalone terminals and tmux panes; sessions are frequent and may stay open while other work continues.
-- Review sizes: `136x65` for the adjacent demonstration pane and `90x30` for compact use.
+- Review sizes: `136x65` for the adjacent demonstration pane, `106x30` for the user-reported medium pane, and `90x30` for compact use.
 - Minimum useful size: `72x18`; below that, show a concise resize state instead of broken panes.
 - Keyboard operation is complete. Mouse capture, Nerd Fonts, animation, and truecolor are not required.
 - Color supplements words, row shape, and position; it never carries focus or status alone.
@@ -88,15 +88,15 @@ Reference language: polished Charm applications, with a compact header, meaningf
 
 ## Layout matrix
 
-| State | Too small (`<72x18`) | Compact (`90x30`) | Wide (`136x65`) |
-|---|---|---|---|
-| Initial/populated | Resize message with current/required dimensions | Two panes; compact 34-cell browse rail and flexible detail | Two panes; approximately 44-cell browse rail and dominant detail |
-| Filtering | Same resize message | Search row stays visible; count becomes `n results of total` | Same, with more title/metadata room |
-| Empty filter | Same resize message | Browse pane explains no match; detail repeats recovery cue | Same without wasting the reading surface |
-| Detail focused | Same resize message | Selected row remains as a subdued full-width band | Selected row remains visible; detail focus rail/title is accented |
-| Long content | Same resize message | Soft-wrapped viewport scrolls to the actual tail | Wider Markdown measure with the same complete source content |
+| State | Too small (`<72x18`) | Compact (`90x30`) | Medium (`106x30`) | Wide (`136x65`) |
+|---|---|---|---|---|
+| Initial/populated | Resize message with current/required dimensions | Two panes; compact 34-cell browse rail and flexible detail | Two panes; 42-cell browse rail and inset editorial reading measure | Two panes; approximately 44-cell browse rail and dominant detail |
+| Filtering | Same resize message | Search row stays visible; count becomes `n results of total` | Same, with readable wrapped result titles | Same, with more title/metadata room |
+| Empty filter | Same resize message | Browse pane explains no match; detail repeats recovery cue | Same without wasting the reading surface | Same without wasting the reading surface |
+| Detail focused | Same resize message | Selected row remains as a subdued full-width band | Selection remains visible beneath a concise humanized title | Selected row remains visible; detail focus rail/title is accented |
+| Long content | Same resize message | Soft-wrapped viewport scrolls to the actual tail | Two-cell reader insets preserve a comfortable line measure | Wider Markdown measure with the same complete source content |
 
-Every supported canvas uses one header row, one footer row, and a body of exactly `height - 2`. The panes have no nested box borders; one separator and surface changes provide structure.
+Every supported canvas uses one header row, one footer row, and a body of exactly `height - 2`. The panes have no nested box borders; one separator and surface changes provide structure. List rows reserve three cells for up to two title lines plus metadata, while the reader keeps two-cell horizontal insets.
 
 ## Keymap
 
@@ -125,8 +125,8 @@ Every supported canvas uses one header row, one footer row, and a body of exactl
 - Real `agentconvos --context --json` data populates the application.
 - Context, count/position, focus, query/filter state, and scroll state are visible at a glance.
 - Selection, focus, inactive selection, match/query, and status have distinct treatments.
-- List rows always render exactly their declared two-line height and selected bands fill the pane.
+- List rows never exceed their declared three-cell height; up to two title lines sit above stable metadata and selected bands fill the pane.
 - Detail content is Glamour v2 Markdown, soft-wrapped, complete, and scrollable to its true tail.
-- `136x65` and `90x30` render to exact Lip Gloss dimensions with an on-canvas footer.
+- `136x65`, `106x30`, and `90x30` render to exact Lip Gloss dimensions with an on-canvas footer.
 - Search owns ordinary typing; its Escape ladder and stable selection are covered by tests.
 - No resume, handoff, source-opening, launcher, packaging, or default-command work enters this slice.

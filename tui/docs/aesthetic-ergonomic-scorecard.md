@@ -1,17 +1,17 @@
 # AgentConvos TUI aesthetic and ergonomic scorecard
 
-Reviewed on 2026-08-03 with six real current-project conversations from Codex and Claude.
+Reviewed on 2026-08-04 with six real current-project conversations from Codex and Claude, including the exact `106x30` state reported by the user.
 
 ## Visual quality
 
 | Criterion | 0–2 | Evidence / issue |
 |---|---:|---|
 | First-glance hierarchy makes context, selection, and current action obvious | 2 | Header shows project/count/position; full-width row and dominant detail show selection; footer names focus and scroll state. |
-| Spacing, alignment, and density form a consistent rhythm | 2 | Two-line list rows, stable metadata baseline, compact header/footer, and one-cell separator held at both target sizes. |
+| Spacing, alignment, and density form a consistent rhythm | 2 | Wrapped three-cell list rows, adjacent metadata, two-cell reader insets, compact chrome, and one separator held across all reviewed sizes. |
 | Focus, selection, inactive selection, match, and activity are distinct | 2 | Accent focus rail/title, strong selected band, subdued inactive band, amber query treatment, textual focus mode; no background activity exists in this slice. |
 | Color is restrained, semantic, legible, and not the only carrier of meaning | 2 | One lilac accent plus subdued selection, amber match, sage status, and textual/glyph equivalents. |
 | Borders, glyphs, badges, and motion are purposeful rather than decorative | 2 | Rounded boxes and logo badge were removed; one plain separator and focus rail remain; no animation or Nerd Font dependency. |
-| Narrow, medium, and wide compositions look intentional | 2 | Exact `60x12` too-small, `90x30` compact split, and `136x65` wide split renderings were inspected/tested. |
+| Narrow, medium, and wide compositions look intentional | 2 | Exact `60x12` too-small, `90x30` compact, user-reported `106x30` medium, and `136x65` wide renderings were inspected/tested. |
 
 Visual subtotal: **12/12**.
 
@@ -40,7 +40,8 @@ Remaining user impact from scores of 1:
 
 ## Required review evidence
 
-- Automated dimensions/states: `60x12` too-small; `90x30` and `136x65` populated; browse, reading, filter, no-match, missing metadata, short `ALL`, long `TOP`/percentage/`END`, active/inactive selection, and resize continuity.
+- Automated dimensions/states: `60x12` too-small; `90x30`, `106x30`, and `136x65` populated; browse, reading, filter, no-match, missing metadata, short `ALL`, long `TOP`/percentage/`END`, active/inactive selection, and resize continuity.
+- Screenshot-matched walkthrough at `106x30`: navigated to conversation `5 / 6`, confirmed humanized `README green CLI`, adjacent metadata, inset detail header, rendered Markdown links/lists, and visible `TOP` state.
 - Real keyboard walkthrough at `136x65`: five list moves to `6 / 6`, Tab and Shift+Tab focus, Markdown links/code/lists, long-detail tail, filtering/count/cursor, Escape restoration to `2 / 6`, Ctrl+C exit 0.
 - Real keyboard walkthrough at `90x30`: list navigation, Tab focus, Page Down to `13%`, End to reply tail, filtering/count/cursor, Escape restoration to `2 / 6`, Ctrl+C exit 0.
 - Final rebuilt-artifact smoke at `136x65`: real backend loaded six conversations, `j` selected `2 / 6`, short detail reported `ALL`, Ctrl+C exit 0.

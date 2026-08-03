@@ -1,6 +1,6 @@
 # AgentConvos TUI product review checklist
 
-Reviewed against real `agentconvos --context --json` data and the Bubble Tea TUI skill v1.1 checklist on 2026-08-03.
+Reviewed against real `agentconvos --context --json` data, the user-provided `106x30` screenshot, and the Bubble Tea TUI skill v1.1 checklist on 2026-08-04.
 
 ## Product and information architecture
 
@@ -46,16 +46,16 @@ Reviewed against real `agentconvos --context --json` data and the Bubble Tea TUI
 - [x] `WindowSizeMsg` drives all component dimensions.
 - [x] Header, body, footer, pane widths, and the single separator are budgeted exactly once.
 - [x] Lip Gloss cell-aware width/height measurement backs representative geometry tests.
-- [x] `136x65`, `90x30`, and the `<72x18` too-small composition are intentional.
+- [x] `136x65`, `106x30`, `90x30`, and the `<72x18` too-small composition are intentional.
 - [x] Compact mode preserves both browse context and the reading surface without horizontal scrolling.
 - [x] Narrative content wraps; low-priority list metadata truncates or disappears first.
 - [x] The detail region receives the flexible remainder rather than an equal-width split.
-- [x] Tests assert exact `136x65`, `90x30`, and `60x12` canvases with footer/state on-canvas.
+- [x] Tests assert exact `136x65`, `106x30`, `90x30`, and `60x12` canvases with footer/state on-canvas.
 
 ## Visual hierarchy and aesthetics
 
 - [x] The result is calm, confident, warm, and purposeful rather than cyber-console or sterile dump.
-- [x] Two-line row rhythm, stable metadata baselines, and one-cell grouping are consistent.
+- [x] Three-cell rows wrap long titles across two lines, keep short-title metadata adjacent, and preserve a stable full-width selection band.
 - [x] Semantic palette roles are centralized.
 - [x] Accent focus, active/inactive selected bands, amber query/match, and sage scroll status are distinct.
 - [x] Focus and scroll state also use words, row shape, and position rather than color alone.
@@ -89,7 +89,7 @@ Reviewed against real `agentconvos --context --json` data and the Bubble Tea TUI
 
 ## Host and accessibility constraints
 
-- [x] Real-data walkthroughs passed in private PTYs at `136x65` and `90x30`.
+- [x] Real-data walkthroughs passed in private PTYs at `136x65`, `106x30`, and `90x30`.
 - [x] Critical actions use standard arrows, Tab, Escape, Page keys, and Ctrl+C.
 - [x] Native terminal selection remains available because mouse capture is disabled.
 - [ ] Paste into the focused filter was not explicitly exercised.
@@ -104,8 +104,8 @@ Reviewed against real `agentconvos --context --json` data and the Bubble Tea TUI
 - [x] `GOMAXPROCS=2 /home/testycool/.local/bin/go vet ./...` exited 0 with no diagnostics.
 - [x] `GOMAXPROCS=2 /home/testycool/.local/bin/go test -p 1 ./...` passed.
 - [x] `timeout 120s env GOMAXPROCS=2 /home/testycool/.local/bin/go test -race -p 1 ./...` passed.
-- [x] Real backend walkthroughs covered both target sizes, browse/read/filter focus, selection restoration, page/end scrolling, and Ctrl+C exit.
-- [x] Raw PTY screen output was inspected throughout the substantial visual change; no persistent screenshot artifact was retained.
+- [x] Real backend walkthroughs covered all three target sizes, browse/read/filter focus, selection restoration, page/end scrolling, and Ctrl+C exit.
+- [x] The user screenshot and raw private-PTY output at the matching `106x30` size were inspected; no persistent generated screenshot artifact was retained.
 - [x] No debug stdout was added.
 - [x] `aesthetic-ergonomic-scorecard.md` contains no zero.
 - [x] Score: `22/24`.
