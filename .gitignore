@@ -18,3 +18,4 @@ analyses/
 .remember/
 .DS_Store
 .playwright-mcp/
+tui/bin/
