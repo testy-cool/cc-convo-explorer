@@ -41,12 +41,15 @@ func TestHeaderKeepsProjectContextQuiet(t *testing.T) {
 	m.width = 110
 
 	header := ansiSequence.ReplaceAllString(m.header(), "")
-	for _, wanted := range []string{"agentconvos", "FIELD NOTES", "convo-explorer", "2 conversations", "/ search"} {
+	for _, wanted := range []string{"agentconvos", "convo-explorer", "1 / 2"} {
 		if !strings.Contains(header, wanted) {
 			t.Fatalf("expected quiet project context %q in header:\n%s", wanted, header)
 		}
 	}
-	for _, noisy := range []string{"SIGNAL DECK", "LIVE", "FEEDS"} {
+	if lipgloss.Height(m.header()) != 1 {
+		t.Fatalf("expected a single-line header:\n%s", header)
+	}
+	for _, noisy := range []string{"FIELD NOTES", "SIGNAL DECK", "LIVE", "FEEDS", "/ search"} {
 		if strings.Contains(header, noisy) {
 			t.Fatalf("expected header without cyber-console label %q:\n%s", noisy, header)
 		}
@@ -71,7 +74,7 @@ func TestConversationListPrioritizesContentOverChrome(t *testing.T) {
 	m.resize()
 
 	list := ansiSequence.ReplaceAllString(m.listView(52), "")
-	for _, wanted := range []string{"RECENT NOTES", "Build the polished public README", "codex", "5 turns", "02 Aug"} {
+	for _, wanted := range []string{"Conversations", "Build the polished public README", "codex", "5 turns", "02 Aug"} {
 		if !strings.Contains(list, wanted) {
 			t.Fatalf("expected content-first list detail %q:\n%s", wanted, list)
 		}
@@ -162,12 +165,12 @@ func TestPreviewUsesComposedConversationLanguage(t *testing.T) {
 	m.refreshPreview()
 
 	preview := ansiSequence.ReplaceAllString(m.preview.View(), "")
-	for _, wanted := range []string{"FIELD NOTE", "019fc465", "codex", "gpt-5.6-sol · max", "Latest outcome", "Agent answered"} {
+	for _, wanted := range []string{"019fc465", "codex", "gpt-5.6-sol · max", "Agent reply"} {
 		if !strings.Contains(preview, wanted) {
 			t.Fatalf("expected plain conversation detail %q in preview:\n%s", wanted, preview)
 		}
 	}
-	for _, noisy := range []string{"SESSION SIGNAL", "TRANSMISSION", "LATEST RESPONSE"} {
+	for _, noisy := range []string{"FIELD NOTE", "Latest outcome", "SESSION SIGNAL", "TRANSMISSION", "LATEST RESPONSE"} {
 		if strings.Contains(preview, noisy) {
 			t.Fatalf("expected preview without cyber-console label %q:\n%s", noisy, preview)
 		}
@@ -196,7 +199,7 @@ func TestReadingHeaderUsesOneEditorialMetadataRhythm(t *testing.T) {
 	}
 }
 
-func TestMediumLayoutUsesAJournalGutterAndReadingLandmarks(t *testing.T) {
+func TestMediumLayoutUsesSimpleListAndDetailRegions(t *testing.T) {
 	m := sizedModel(contextPayload{
 		Project: "/work/convo-explorer",
 		Conversations: []conversation{{
@@ -222,12 +225,12 @@ func TestMediumLayoutUsesAJournalGutterAndReadingLandmarks(t *testing.T) {
 
 	view := m.View().Content
 	plain := ansiSequence.ReplaceAllString(view, "")
-	for _, wanted := range []string{"RECENT NOTES", "README green CLI", "Latest outcome", "Task opened", "Agent answered"} {
+	for _, wanted := range []string{"Conversations", "README green CLI", "Agent reply"} {
 		if !strings.Contains(plain, wanted) {
 			t.Fatalf("expected composed medium-screen landmark %q:\n%s", wanted, plain)
 		}
 	}
-	for _, rejected := range []string{"Conversation detail", "Recent conversations", "│"} {
+	for _, rejected := range []string{"FIELD NOTES", "Latest outcome", "Task opened", "Agent answered", "Conversation detail", "Recent conversations", "│"} {
 		if strings.Contains(plain, rejected) {
 			t.Fatalf("expected journal composition without rejected chrome %q:\n%s", rejected, plain)
 		}
@@ -442,10 +445,10 @@ func TestSlashSearchIsTransientVisibleAndEscapeClearsIt(t *testing.T) {
 		t.Fatalf("expected one filtered item, got %d", len(m.conversations.VisibleItems()))
 	}
 	activeHeader := ansiSequence.ReplaceAllString(m.header(), "")
-	if !strings.Contains(activeHeader, "SEARCH") || !strings.Contains(activeHeader, "1 / 1") {
+	if !strings.Contains(activeHeader, "search") || !strings.Contains(activeHeader, "1 / 1") {
 		t.Fatalf("expected active search masthead to preserve selected position:\n%s", activeHeader)
 	}
-	for _, wanted := range []string{"SEARCH FIELD NOTES", "needle", "1 result", "1 / 1", "Needle session", "Esc clear"} {
+	for _, wanted := range []string{"needle", "1 result", "1 / 1", "Needle session", "Esc clear"} {
 		if !strings.Contains(strings.ToLower(filtered), strings.ToLower(wanted)) {
 			t.Fatalf("expected visible filter state %q:\n%s", wanted, filtered)
 		}
@@ -502,7 +505,7 @@ func TestCompactLayoutUsesDeliberateFeedAndReadingModes(t *testing.T) {
 
 	view := m.View().Content
 	plain := ansiSequence.ReplaceAllString(view, "")
-	for _, wanted := range []string{"RECENT NOTES", "First conversation", "BROWSE", "1 / 2"} {
+	for _, wanted := range []string{"Conversations", "First conversation", "BROWSE", "1 / 2"} {
 		if !strings.Contains(plain, wanted) {
 			t.Fatalf("expected compact layout status %q:\n%s", wanted, plain)
 		}
@@ -524,10 +527,10 @@ func TestCompactLayoutUsesDeliberateFeedAndReadingModes(t *testing.T) {
 
 	m = press(m, tea.KeyTab, "")
 	reading := ansiSequence.ReplaceAllString(m.View().Content, "")
-	if !strings.Contains(reading, "Agent answered") || !strings.Contains(reading, "READ") {
+	if !strings.Contains(reading, "Agent reply") || !strings.Contains(reading, "READ") {
 		t.Fatalf("expected compact Tab to open the full-width reading mode:\n%s", reading)
 	}
-	if strings.Contains(reading, "RECENT NOTES") {
+	if strings.Contains(reading, "Conversations") {
 		t.Fatalf("expected compact reading mode not to squeeze in the feed:\n%s", reading)
 	}
 	m = press(m, tea.KeyEscape, "")
@@ -557,7 +560,7 @@ func TestListDelegateNeverRendersMoreLinesThanItDeclares(t *testing.T) {
 	}
 	viewLines := strings.Split(ansiSequence.ReplaceAllString(m.View().Content, ""), "\n")
 	for i, line := range viewLines {
-		if !strings.Contains(line, "● For THIS task") {
+		if !strings.Contains(line, "▌ For THIS task") {
 			continue
 		}
 		if i+1 >= len(viewLines) || !strings.Contains(viewLines[i+1], "codex") ||
@@ -703,7 +706,7 @@ func TestTooSmallLayoutIsIntentionalAndExact(t *testing.T) {
 	}
 }
 
-func TestWideJournalLayoutUsesLayeredSurfacesWithoutDivider(t *testing.T) {
+func TestWideLayoutUsesSimpleRegionsWithoutBoxes(t *testing.T) {
 	m := sizedModel(contextPayload{
 		Project:       "/work/convo-explorer",
 		Conversations: []conversation{{UUID: "one", Source: "codex", FirstMessage: "First", LastAgentMessage: "Finished the field note."}},
@@ -715,10 +718,10 @@ func TestWideJournalLayoutUsesLayeredSurfacesWithoutDivider(t *testing.T) {
 			t.Fatalf("expected editorial surfaces rather than rounded pane boxes %q:\n%s", border, plain)
 		}
 	}
-	if !strings.Contains(plain, "RECENT NOTES") || !strings.Contains(plain, "Latest outcome") {
+	if !strings.Contains(plain, "Conversations") || !strings.Contains(plain, "Agent reply") {
 		t.Fatalf("expected both workspace regions:\n%s", plain)
 	}
-	for _, rejected := range []string{"Conversation detail", "│"} {
+	for _, rejected := range []string{"FIELD NOTES", "Latest outcome", "ON THIS NOTE", "Conversation detail", "│"} {
 		if strings.Contains(plain, rejected) {
 			t.Fatalf("expected authored whitespace instead of rejected divider %q:\n%s", rejected, plain)
 		}
@@ -849,7 +852,7 @@ func TestMissingMetadataIsOmittedCleanly(t *testing.T) {
 	}
 }
 
-func TestReadingHeroUsesBackendSummaryWhenPresent(t *testing.T) {
+func TestSimpleDetailDoesNotRenderSummaryOrOutcomeCard(t *testing.T) {
 	m := sizedModel(contextPayload{
 		Project: "/work/convo-explorer",
 		Conversations: []conversation{{
@@ -863,15 +866,19 @@ func TestReadingHeroUsesBackendSummaryWhenPresent(t *testing.T) {
 	}, 109, 33)
 
 	preview := ansiSequence.ReplaceAllString(m.preview.GetContent(), "")
-	if !strings.Contains(preview, "Latest outcome") || !strings.Contains(preview, "Shipped the verified conversation journal shell.") {
-		t.Fatalf("expected the backend-provided summary to anchor the outcome hero:\n%s", preview)
+	for _, wanted := range []string{"Journal-shell", "First message", "Agent reply"} {
+		if !strings.Contains(preview, wanted) {
+			t.Fatalf("expected simple detail content %q:\n%s", wanted, preview)
+		}
 	}
-	if strings.Index(preview, "Shipped the verified conversation journal shell.") > strings.Index(preview, "Agent answered") {
-		t.Fatalf("expected latest outcome before the complete reply timeline:\n%s", preview)
+	for _, removed := range []string{"Latest outcome", "Shipped the verified conversation journal shell."} {
+		if strings.Contains(preview, removed) {
+			t.Fatalf("expected no summary/outcome card content %q:\n%s", removed, preview)
+		}
 	}
 }
 
-func TestReadingHeroUsesExactLatestAgentParagraphWithoutSummary(t *testing.T) {
+func TestSimpleDetailShowsCompleteAgentReplyOnce(t *testing.T) {
 	m := sizedModel(contextPayload{
 		Project: "/work/convo-explorer",
 		Conversations: []conversation{{
@@ -883,15 +890,15 @@ func TestReadingHeroUsesExactLatestAgentParagraphWithoutSummary(t *testing.T) {
 	}, 109, 33)
 
 	preview := ansiSequence.ReplaceAllString(m.preview.GetContent(), "")
-	if !strings.Contains(preview, "Latest outcome") || strings.Count(preview, "Created the field-notes reading shell.") != 2 {
-		t.Fatalf("expected the exact first agent paragraph in both outcome and full reply:\n%s", preview)
+	if !strings.Contains(preview, "Agent reply") || strings.Count(preview, "Created the field-notes reading shell.") != 1 {
+		t.Fatalf("expected the complete reply once without an outcome duplicate:\n%s", preview)
 	}
-	if strings.Contains(preview, "Conversation summary") {
-		t.Fatalf("expected no fabricated summary label when backend summary is absent:\n%s", preview)
+	if strings.Contains(preview, "Latest outcome") {
+		t.Fatalf("expected no outcome label:\n%s", preview)
 	}
 }
 
-func TestReadingTimelineUsesHumanAndAgentSpeakerLanguage(t *testing.T) {
+func TestSimpleDetailUsesOnlyNecessaryMessageLabels(t *testing.T) {
 	m := sizedModel(contextPayload{
 		Project: "/work/convo-explorer",
 		Conversations: []conversation{{
@@ -904,14 +911,15 @@ func TestReadingTimelineUsesHumanAndAgentSpeakerLanguage(t *testing.T) {
 	}, 109, 33)
 
 	preview := ansiSequence.ReplaceAllString(m.preview.GetContent(), "")
-	for _, wanted := range []string{"You asked", "You asked next", "Agent answered"} {
+	for _, wanted := range []string{"Your latest message", "Agent reply"} {
 		if !strings.Contains(preview, wanted) {
-			t.Fatalf("expected editorial speaker landmark %q:\n%s", wanted, preview)
+			t.Fatalf("expected plain detail label %q:\n%s", wanted, preview)
 		}
 	}
-	if !(strings.Index(preview, "You asked") < strings.Index(preview, "You asked next") &&
-		strings.Index(preview, "You asked next") < strings.Index(preview, "Agent answered")) {
-		t.Fatalf("expected chronological speaker sequence:\n%s", preview)
+	for _, removed := range []string{"You asked", "You asked next", "Agent answered", "Latest outcome", "FIELD NOTE"} {
+		if strings.Contains(preview, removed) {
+			t.Fatalf("expected theatrical label %q to be removed:\n%s", removed, preview)
+		}
 	}
 }
 
@@ -964,14 +972,14 @@ func TestAppliedSearchCollapsesToCompactMastheadStatus(t *testing.T) {
 	if strings.Contains(plain, "SEARCH FIELD NOTES") || strings.Contains(plain, "Filter conversations") {
 		t.Fatalf("expected accepted search to collapse its input strip:\n%s", plain)
 	}
-	for _, wanted := range []string{"FILTER", "journal", "1 result"} {
+	for _, wanted := range []string{"/journal", "1 result", "1 / 1"} {
 		if !strings.Contains(strings.ToLower(plain), strings.ToLower(wanted)) {
 			t.Fatalf("expected compact applied-filter status %q:\n%s", wanted, plain)
 		}
 	}
 }
 
-func TestCompactBrowseUsesAvailableSpaceForSelectedOutcome(t *testing.T) {
+func TestCompactBrowseDoesNotAddOutcomeCard(t *testing.T) {
 	m := sizedModel(contextPayload{
 		Project: "/work/convo-explorer",
 		Conversations: []conversation{
@@ -986,9 +994,9 @@ func TestCompactBrowseUsesAvailableSpaceForSelectedOutcome(t *testing.T) {
 	}, 90, 30)
 
 	plain := ansiSequence.ReplaceAllString(m.View().Content, "")
-	for _, wanted := range []string{"ON THIS NOTE", "Shipped the selected note with a calm reading mode."} {
-		if !strings.Contains(plain, wanted) {
-			t.Fatalf("expected compact feed to use genuine vacant space for %q:\n%s", wanted, plain)
+	for _, removed := range []string{"ON THIS NOTE", "Shipped the selected note with a calm reading mode."} {
+		if strings.Contains(plain, removed) {
+			t.Fatalf("expected compact browse to omit outcome decoration %q:\n%s", removed, plain)
 		}
 	}
 }
@@ -1020,5 +1028,34 @@ func TestCompactReadingFooterKeepsQuitFallbackVisible(t *testing.T) {
 	footer := ansiSequence.ReplaceAllString(m.footer(), "")
 	if !strings.Contains(footer, "ctrl+c quit") || strings.Contains(footer, "…") {
 		t.Fatalf("expected compact reading help to keep the exit fallback visible:\n%s", footer)
+	}
+}
+
+func TestPaletteIsNeutralWithOneAccent(t *testing.T) {
+	colors := newPalette(true)
+	want := map[string]string{
+		"canvas":             "#0D0D0D",
+		"panel":              "#121212",
+		"text":               "#F2F2F2",
+		"muted":              "#929292",
+		"separator":          "#303030",
+		"accent":             "#78A9D4",
+		"selection":          "#303030",
+		"inactive selection": "#242424",
+	}
+	got := map[string]string{
+		"canvas":             terminalColor(colors.canvas),
+		"panel":              terminalColor(colors.panel),
+		"text":               terminalColor(colors.text),
+		"muted":              terminalColor(colors.muted),
+		"separator":          terminalColor(colors.separator),
+		"accent":             terminalColor(colors.accent),
+		"selection":          terminalColor(colors.selection),
+		"inactive selection": terminalColor(colors.selectionInactive),
+	}
+	for role, expected := range want {
+		if got[role] != expected {
+			t.Fatalf("expected %s %s, got %s", role, expected, got[role])
+		}
 	}
 }
