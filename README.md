@@ -28,9 +28,10 @@ agentconvos --context --json    # structured full messages for piping to agents
 `--context` is the quick answer to “what was last discussed in this folder?” For
 each coding-agent source it shows up to five recent conversations with their date,
 turn count, model and effort, first user message, latest user message, latest agent
-message, and cached summary. Terminal output keeps long messages to short one-line
-excerpts; JSON preserves their complete normalized text. `--last N` remains the
-compact chronological view across all sources.
+message, and cached summary. Terminal and JSON output preserve the complete
+normalized message text. If Codex did not record a subagent's delegated prompt in
+the child transcript, the first-message field labels the retained delegated-task
+name instead. `--last N` remains the compact chronological view across all sources.
 
 Generate or refresh the cached one-sentence summaries with `agentconvos --summarize`.
 Each summary uses the complete normalized conversation in two Gemini passes: the first

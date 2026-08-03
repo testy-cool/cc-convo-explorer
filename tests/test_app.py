@@ -384,6 +384,37 @@ class CodexParserTests(unittest.TestCase):
         self.assertEqual(meta.uuid, "child-session")
         self.assertEqual(meta.timestamp, "2026-07-18T10:30:00Z")
 
+    def test_subagent_metadata_keeps_delegated_task_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "rollout-child-session.jsonl"
+            records = [
+                {
+                    "type": "session_meta",
+                    "payload": {
+                        "id": "child-session",
+                        "timestamp": "2026-08-03T10:00:00Z",
+                        "cwd": str(path.parent),
+                        "source": {
+                            "subagent": {
+                                "thread_spawn": {
+                                    "parent_thread_id": "parent-session",
+                                    "agent_path": "/root/readme_green_service",
+                                }
+                            }
+                        },
+                    },
+                }
+            ]
+            path.write_text(
+                "\n".join(json.dumps(record) for record in records),
+                encoding="utf-8",
+            )
+
+            meta = get_meta(path)
+
+        self.assertIsNotNone(meta)
+        self.assertEqual(meta.agent_path, "/root/readme_green_service")
+
     def test_text_parser_releases_json_records_as_it_streams(self):
         class TrackedRecord(dict):
             alive = 0
@@ -624,7 +655,29 @@ class ScannerCacheTests(unittest.TestCase):
             reloaded,
             {"/tmp/session.jsonl": {"uuid": "child-session"}},
         )
-        self.assertEqual(persisted["__version__"], 4)
+        self.assertEqual(persisted["__version__"], 5)
+
+    def test_metadata_cache_preserves_subagent_task_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "session.jsonl"
+            path.write_text("session", encoding="utf-8")
+            parsed = ConversationMeta(
+                path=path,
+                uuid="child-session",
+                slug="",
+                timestamp="2026-08-03T10:00:00Z",
+                cwd=tmp,
+                preview="",
+                source="codex",
+                agent_path="/root/readme_green_service",
+            )
+            cache = {}
+
+            with patch("agentconvos.scanner.get_meta", return_value=parsed):
+                scanner_module._get_meta_cached(path, cache)
+                cached = scanner_module._get_meta_cached(path, cache)
+
+        self.assertEqual(cached.agent_path, "/root/readme_green_service")
 
 
 class CliMetadataTests(unittest.TestCase):
@@ -1312,6 +1365,57 @@ class ContextCliTests(unittest.TestCase):
         self.assertIn("First:   First request", output)
         self.assertIn("You:     Latest user follow-up", output)
         self.assertIn("Agent:   Latest agent response", output)
+
+    def test_context_text_preserves_complete_multiline_messages(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "codex.jsonl"
+            path.write_text("session", encoding="utf-8")
+            meta = ConversationMeta(
+                path=path,
+                uuid="codex-context",
+                slug="context-session",
+                timestamp="2026-08-03T10:00:00Z",
+                cwd=str(root),
+                preview="",
+                source="codex",
+                agent_path="/root/readme_green_service",
+            )
+            complete_reply = "A" * 320 + "\n\nFINAL-REPLY-SENTINEL"
+            turns = [Turn("assistant", complete_reply)]
+
+            old_argv = sys.argv
+            old_cwd = Path.cwd()
+            sys.argv = ["agentconvos", "--context"]
+            stream = io.StringIO()
+            try:
+                os.chdir(root)
+                with (
+                    patch(
+                        "agentconvos.scanner.scan_projects",
+                        return_value=[Project("context", str(root), [meta])],
+                    ),
+                    patch("agentconvos.summarize.load_summaries", return_value={}),
+                    patch("agentconvos.app.parse_jsonl", return_value=turns),
+                    patch(
+                        "agentconvos.app.get_stats",
+                        return_value=ConversationStats(model="gpt-test", effort="high"),
+                    ),
+                    contextlib.redirect_stdout(stream),
+                ):
+                    main()
+            finally:
+                os.chdir(old_cwd)
+                sys.argv = old_argv
+
+        output = stream.getvalue()
+        self.assertIn(
+            "First:   [delegated task] readme_green_service (prompt not recorded)",
+            output,
+        )
+        self.assertIn("A" * 320, output)
+        self.assertIn("FINAL-REPLY-SENTINEL", output)
+        self.assertNotIn("A" * 279 + "…", output)
 
 
 class AgyConversationTests(unittest.TestCase):

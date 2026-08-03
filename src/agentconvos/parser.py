@@ -58,6 +58,7 @@ class ConversationMeta:
     turn_count: int = 0
     source: str = "claude"  # "claude", "codex", "pi", "agy", "opencode", or "clihow"
     git_branch: str = ""
+    agent_path: str = ""  # Codex subagent path, when this is a delegated conversation
 
 
 _OPENCODE_REF_SEPARATOR = "::opencode-session="
@@ -373,6 +374,7 @@ def _get_meta_codex(path: Path) -> ConversationMeta | None:
         cwd = ""
         preview = ""
         preview_source = ""
+        agent_path = ""
         with open(path, "r", encoding="utf-8") as f:
             line_count = 0
             for line in f:
@@ -388,6 +390,22 @@ def _get_meta_codex(path: Path) -> ConversationMeta | None:
                     session_id = payload.get("id", path.stem)
                     timestamp = payload.get("timestamp", rec.get("timestamp", ""))
                     cwd = payload.get("cwd", "")
+                    source_meta = payload.get("source", {})
+                    subagent_meta = (
+                        source_meta.get("subagent", {})
+                        if isinstance(source_meta, dict)
+                        else {}
+                    )
+                    thread_spawn = (
+                        subagent_meta.get("thread_spawn", {})
+                        if isinstance(subagent_meta, dict)
+                        else {}
+                    )
+                    if not isinstance(thread_spawn, dict):
+                        thread_spawn = {}
+                    agent_path = payload.get("agent_path", "") or thread_spawn.get(
+                        "agent_path", ""
+                    )
 
                 if rtype == "event_msg" and payload.get("type") == "user_message" and preview_source != "event":
                     msg = payload.get("message", "")
@@ -421,6 +439,7 @@ def _get_meta_codex(path: Path) -> ConversationMeta | None:
             cwd=cwd,
             preview=preview,
             source="codex",
+            agent_path=agent_path,
         )
     except (json.JSONDecodeError, OSError):
         pass

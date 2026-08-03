@@ -2057,6 +2057,9 @@ def main() -> None:
                 turns = parse_jsonl(c.path, detail=DETAIL_TEXT)
                 stats = get_stats(c.path)
                 first_user = next((turn.text for turn in turns if turn.role == "user"), "")
+                if not first_user and c.agent_path:
+                    task_name = c.agent_path.rstrip("/").rsplit("/", 1)[-1]
+                    first_user = f"[delegated task] {task_name} (prompt not recorded)"
                 last_user = next(
                     (turn.text for turn in reversed(turns) if turn.role == "user"),
                     "",
@@ -2090,9 +2093,11 @@ def main() -> None:
             label = "Context" if args.context else "Last"
             print(f"\n{label} for {cwd} ({len(cwd_convos)} total):\n")
             if args.context:
-                def _excerpt(text: str, limit: int = 280) -> str:
-                    compact = " ".join(text.split())
-                    return compact if len(compact) <= limit else compact[:limit - 1].rstrip() + "…"
+                def _print_context_field(label: str, text: str) -> None:
+                    prefix = f"    {label:<9}"
+                    continuation = " " * len(prefix)
+                    complete = text or "(none)"
+                    print(prefix + complete.replace("\n", "\n" + continuation))
 
                 for record in records:
                     name = record["slug"] or record["uuid"][:8]
@@ -2104,10 +2109,10 @@ def main() -> None:
                         f"  · model={model}  · effort={effort}"
                     )
                     if record["summary"]:
-                        print(f"    Summary: {_excerpt(record['summary'])}")
-                    print(f"    First:   {_excerpt(record['first_message']) or '(none)'}")
-                    print(f"    You:     {_excerpt(record['last_user_message']) or '(none)'}")
-                    print(f"    Agent:   {_excerpt(record['last_agent_message']) or '(none)'}")
+                        _print_context_field("Summary:", record["summary"])
+                    _print_context_field("First:", record["first_message"])
+                    _print_context_field("You:", record["last_user_message"])
+                    _print_context_field("Agent:", record["last_agent_message"])
                     print()
             else:
                 for c in selected:

@@ -10,7 +10,7 @@ from pathlib import Path
 from .parser import ConversationMeta, get_meta, list_opencode_metas
 
 _CACHE_PATH = Path(os.environ.get("USERPROFILE", Path.home())) / ".claude" / "convo-explorer" / "meta-cache.json"
-_CACHE_VERSION = 4
+_CACHE_VERSION = 5
 
 
 def _load_cache() -> dict:
@@ -50,6 +50,7 @@ def _get_meta_cached(path: Path, cache: dict) -> ConversationMeta | None:
             preview=cached.get("preview", ""),
             source=cached.get("source", "claude"),
             git_branch=cached.get("git_branch", ""),
+            agent_path=cached.get("agent_path", ""),
         )
 
     meta = get_meta(path)
@@ -64,6 +65,7 @@ def _get_meta_cached(path: Path, cache: dict) -> ConversationMeta | None:
             "preview": meta.preview,
             "source": meta.source,
             "git_branch": meta.git_branch,
+            "agent_path": meta.agent_path,
         }
     return meta
 
