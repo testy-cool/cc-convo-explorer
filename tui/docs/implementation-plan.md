@@ -1,124 +1,97 @@
-# AgentConvos TUI implementation plan
+# AgentConvos conversation journal — implementation plan
 
 ## Objective
 
-Deliver a real-data, browse/detail AgentConvos workspace whose geometry, keyboard routing, filtering, and complete Markdown reading experience are ready for visual approval.
+Replace the rejected split-browser composition with a premium field-notes shell while preserving the proven real-data, selection, search, focus, viewport, and complete Markdown contracts.
 
-## Existing constraints
+## Ground truth and constraints
 
-- Module: Go `1.25.8`; host toolchain `/home/testycool/.local/bin/go` reports Go `1.26.5`.
-- Installed stack: Bubble Tea `2.0.8`, Bubbles `2.1.1`, Lip Gloss `2.0.5`, Glamour `2.0.1`; all imports remain `charm.land/.../v2`.
-- `loadContext` already consumes `agentconvos --context --json` (or `AGENTCONVOS_BACKEND`) before launching the TUI.
-- Scope is browse/detail, focus, scrolling, and local Bubbles filtering only.
-- Review terminals are tmux/private PTY at `136x65`, the reported `106x30` medium pane, and `90x30`; minimum is `72x18`.
-- No mouse capture, animation, background work, subprocess handoff, or new adapters are needed.
+- Host Go only: `/home/testycool/.local/bin/go`; capped with `GOMAXPROCS=2` and `go test -p 1`.
+- Module stack remains Bubble Tea `2.0.8`, Bubbles `2.1.1`, Lip Gloss `2.0.5`, and Glamour `2.0.1`, all `charm.land/.../v2`.
+- Existing startup adapter continues to invoke `agentconvos --context --json` (or `AGENTCONVOS_BACKEND`) once before the TUI.
+- The current real project payload has no populated `summary`/`slug`; the design must use exact opening/latest/outcome content and must not infer a recap.
+- Scope remains browse/detail, focus, scrolling, and search only.
+- No Docker, mouse capture, animation, background workers, handoff actions, launcher migration, packaging, or unrelated adapters.
 
-## Primary user flow
+## Implementation checkpoints
+
+### 1. Specify the reset in tests
+
+Add or revise focused tests before production edits, then observe the expected failures:
+
+- `150x40` and `109x33` use a two-surface journal/reading composition with gutter whitespace, no hard separator, no generic detail heading, exact dimensions, and an on-canvas footer.
+- `90x30` uses feed-only and read-only modes selected by focus; `Tab` and compact `Esc` preserve selection/query/scroll state.
+- Browsing has no vacant input row; slash search reveals a full-width focused strip with result count and Escape language.
+- The list delegate declares two rows, fills its assigned width when selected, aligns metadata/date, and distinguishes focused/inactive selection by both rail and surface.
+- The reader exposes a wrapping title, honest exact latest-outcome excerpt, restrained metadata, and speaker-led timeline labels.
+- Missing summaries and missing metadata do not generate fake or blank sections; duplicate first/latest-user content remains suppressed.
+- Long Markdown remains rendered, complete, wrapped, and scrollable to a unique tail marker.
+
+### 2. Recompose model geometry
+
+- Extend `paneLayout` with a compact single-pane flag, authored masthead/search/footer heights, feed width, gutter width, and reading width.
+- Use a `90x30`-appropriate breakpoint (chosen from measured content, not device labels) that switches the body to one major region.
+- Keep selection identity, list filtering state, viewport offset, and component ownership unchanged across resize.
+- In compact mode, derive visible region from explicit `paneFocus`; `Tab` toggles the region and `Esc` returns read to feed after temporary search state is cleared.
+
+### 3. Redesign semantic presentation
+
+- Replace lavender/plum tokens with graphite canvas/feed, warm paper/raised surfaces, ivory/taupe type, scarce vermilion signature, teal question, ochre answer, and sage state.
+- Replace the vertical separator and bordered-pane language with a two/three-cell gutter and layered surfaces.
+- Make the feed delegate two lines: timeline marker + concise humanized title, then rail + stable source/turn/date metadata.
+- Compose a two-line masthead with publication identity, project, position/count, focus, search affordance, and applied-query state.
+- Compose the footer from Bubbles key bindings into two calm groups plus a right-aligned focus/position/scroll state.
+
+### 4. Build the reading sheet
+
+- Replace generic pane headings and uppercase document sections with a hero and editorial message sequence.
+- Hero order: note eyebrow/position, strong wrapping title, metadata band, **Latest outcome** exact first meaningful paragraph from the latest agent message.
+- Timeline order: `You opened with` or `Task opened`; `You asked next` only when present and distinct; `Agent answered` with full latest-agent Markdown.
+- Continue using Glamour v2 for all message bodies. Preserve source content, soft wrap to the calculated reading measure, and allow scrolling to the true tail.
+
+### 5. Make search transient
+
+- Retain the existing Bubbles list filter/input state and selection-anchor mechanics.
+- Hide the input while browsing. On `/`, expose the deliberate search strip beneath the masthead and route ordinary keys exclusively to the component.
+- On Enter, collapse to compact applied-query status. On Esc, cancel or clear before any compact-mode recovery.
+- Keep no-match recovery inside the feed rather than filling the reader with fabricated content.
+
+### 6. Visual review and subtraction
+
+- Build once after green tests and drive real backend data in private PTYs at `150x40`, `109x33`, and `90x30` (feed, read, search, filtered, and tail states).
+- Capture and inspect the actual ANSI screens as visual artifacts.
+- Remove at least one element that competes with the selected title/outcome after the first review. Candidate removals are redundant focus prose, duplicated position labels, or an extra rule—not content required by the contract.
+- Repeat only the focused test/build needed for the refinement, then perform the final capped gates.
+
+## Model and key routing
+
+- Canonical state remains `contextPayload`, Bubbles `list.Model`, `viewport.Model`, `help.Model`, `paneFocus`, dimensions, and stable filter-selection anchor.
+- `Ctrl+C` quits globally.
+- `/` enters search outside text entry; input consumes ordinary text/paste.
+- `Tab`/`Shift+Tab` switch feed/read focus at every width. At compact width this also switches the visible screen.
+- Feed focus sends arrows/`j`/`k` to Bubbles list. Read focus sends arrows/`j`/`k`, pages, and limits to Bubbles viewport.
+- `Esc` ladder: cancel/clear active search, then return compact read to feed, otherwise stay in the app.
+
+## Verification gates
+
+Run serially, one command at a time:
 
 ```text
-launch -> identify project/selection -> browse or / filter -> see detail update -> Tab to read -> scroll to tail -> Esc clear or Tab browse -> Ctrl+C exit
+gofmt changed Go files
+GOMAXPROCS=2 /home/testycool/.local/bin/go vet ./...
+GOMAXPROCS=2 /home/testycool/.local/bin/go test -p 1 ./...
+GOMAXPROCS=2 /home/testycool/.local/bin/go build -o bin/agentconvos-tui .
 ```
 
-The likely next action after reading is selecting another conversation, so list selection and filter context stay intact.
+Skip race because the visual reset adds no concurrent logic. Then perform real-data PTY walkthroughs at the three target sizes, covering navigation, focus, transient search/clear, selection continuity, compact mode transition, Markdown rendering, tail reachability, and Ctrl+C.
 
-## Information hierarchy
+Before committing: complete the skill review checklist and aesthetic/ergonomic scorecard honestly; inspect recent commit convention, status, and staged diff. Create one effect-oriented commit and do not amend or push.
 
-- Dominant: project, selected title, and current conversation message content.
-- Persistent: result count/position, focus word, query/filter state, and viewport scroll status.
-- Secondary: date, source, turns, short ID, model, and effort.
-- Detail-only: full first message, non-duplicate latest user message, and full latest agent reply.
-- First to disappear: redundant labels and empty metadata; important narrative content wraps instead of truncating.
+## Acceptance
 
-## Screens, modes, and overlays
-
-- Browse mode: list focused, detail visible.
-- Reading mode: detail focused, list selection remains visible but inactive.
-- Filter mode: Bubbles filter input owns ordinary keys; no modal or extra screen.
-- Too-small mode: concise resize instruction while model/query/selection state remains intact.
-- There are no overlays, launchers, action menus, or external-process screens in this slice.
-
-## Focus order and keys
-
-- Global: `Ctrl+C`; `Tab`/`Shift+Tab`; `/` only outside filter editing.
-- Browse: arrows and `j`/`k` go to Bubbles list.
-- Reading: arrows, `j`/`k`, `PgUp`/`PgDn` go to Bubbles viewport; Home/End and `g`/`G` jump.
-- Filter: the list’s `FilterInput` receives ordinary typing and paste; `Enter` applies; `Esc` cancels/clears.
-- No bare letter quits. Contextual Bubbles help is rendered in the footer.
-
-## Model state
-
-- Canonical `contextPayload` and Bubbles list items.
-- Explicit `paneFocus` (`browseFocus`, `detailFocus`).
-- Terminal dimensions and a computed `paneLayout`.
-- Stable selection identity captured when filtering begins and restored when possible.
-- Bubbles `list.Model`, `viewport.Model`, and `help.Model`.
-- Semantic palette and dark/light background choice.
-
-## Messages
-
-- `tea.BackgroundColorMsg`: update palette and cached Markdown presentation.
-- `tea.WindowSizeMsg`: recalculate exact body/pane/component dimensions and re-render wrapping.
-- `tea.KeyPressMsg`: global routing, filter ownership, focus switching, then focused component routing.
-- Bubbles filter completion messages: update visible results and restore the selection anchor when it remains visible.
-
-There are no custom async messages in this thin slice.
-
-## Commands and adapters
-
-- Startup adapter: `agentconvos --context --json`, structured JSON, invoked once before the Bubble Tea program starts.
-- Bubbles may return cursor-blink and local filtering commands; parent update retains them.
-- Startup errors remain actionable stderr and non-zero exit. There is no in-app retry because backend lifecycle changes are outside this slice.
-
-## Layout matrix
-
-- Chrome: header `1`, footer `1`, body `height - 2`.
-- Wide `136x65`: browse pane about `44`, one-cell separator, detail receives the remainder; body height `63`.
-- Medium `106x30`: browse pane `42`, one-cell separator, detail uses two-cell horizontal reading insets; body height `28`.
-- Compact `90x30`: browse pane about `34`, one-cell separator, detail receives the remainder; body height `28`.
-- Pane children use the exact assigned width. There is no parent horizontal padding that can make a delegate’s declared width wrap.
-- Browse body: pane heading `1`, search row `1`, list gets `body - 2`; delegates reserve three rows for up to two humanized title lines and metadata.
-- Detail body: pane heading `1`, viewport gets `body - 1` inside a two-cell horizontal reading inset.
-- Too-small `<72x18`: exact-size resize view, preserving state for the next resize.
-
-## Visual system
-
-- Qualities: calm, confident, warm, purposeful. Anti-goals: cyber-console, sterile dump, rainbow/border soup.
-- Balanced density with three-cell rows, wrapped titles, stable adjacent metadata, and one-cell grouping rhythm.
-- Central roles: canvas, panel, raised surface, text, muted, border/separator, accent, selected, inactive-selected, match, status, error.
-- Focus: accent pane-title rail plus footer word. Selection: full-row background. Inactive selection: quieter full-row background. Match: amber query treatment. Status: sage scroll label plus text.
-- One vertical separator; no rounded boxes around both panes, decorative logo, or animation.
-
-## Interaction continuity
-
-- Selection is identified by stable UUID/source/timestamp/message identity.
-- Search captures the pre-filter selection, keeps it when still visible, and restores it after clear.
-- Resize preserves focus, query, selection, and viewport offset when content identity does not change.
-- Selection changes intentionally reset detail to the top; focus changes do not.
-- Re-rendering Markdown for width/theme preserves full source content; scrolling can reach the final line.
-
-## States and copy
-
-- Populated browse: `Recent`, selected row, full detail.
-- Filtering: visible `/ query`, `n results of total`, `FILTER` footer state.
-- No match: `No conversations match “query”. Esc clears the filter.`
-- Too small: `AgentConvos needs at least 72x18` plus current size.
-- Startup error: `agentconvos-tui: load project context: <cause>`.
-- Missing fields are omitted; identical first/latest-user messages render once.
-
-## Tests and review evidence
-
-- Preserve the existing failing delegate-height/footer geometry tests and observe red then green.
-- Add red tests for `Shift+Tab`, Ctrl+C-only exit, search selection restoration, duplicate-message omission, exact `136x65`/`106x30`/`90x30` geometry, wrapped/humanized rows, reading insets, and too-small rendering.
-- Keep existing tests for contextual help, list/detail routing, complete tail access, Bubbles filtering, full-width selection, and Glamour Markdown.
-- Run gofmt, vet, `go test -p 1 ./...`, build, and a capped serialized race pass if practical.
-- Walk through real backend data in private PTYs at all review dimensions and inspect captured screens.
-- Complete `docs/review-checklist.md` and `docs/aesthetic-ergonomic-scorecard.md`; target at least `20/24` with no zero.
-
-## Acceptance criteria
-
-- Exact supported geometry and complete content.
-- Obvious but restrained focus/selection hierarchy.
-- Predictable keyboard grammar and Escape ladder.
-- Stable search context and contextual help.
-- Real backend walkthrough succeeds at both target dimensions.
-- Only the approved UI slice and directly relevant tests/docs change.
+- The shell reads as a conversation journal and warm reading sheet, not the rejected data browser.
+- Purpose and latest outcome are the first strong reading anchors.
+- Recency feed, speaker timeline, search treatment, authored chrome, and palette are materially different from the rejected artifact.
+- Real data and all pre-existing interaction/content guarantees remain intact.
+- Supported canvases are exact and visually inspected, not only string-tested.
+- The result is presented as ready for the user's visual judgment, never defended by a numeric score.

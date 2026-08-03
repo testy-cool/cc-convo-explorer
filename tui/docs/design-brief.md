@@ -1,132 +1,145 @@
-# AgentConvos TUI design brief
+# AgentConvos conversation journal — design brief
 
 ## Product outcome
 
-Let a developer orient to the current project, find a recent coding-agent conversation, and read its complete rendered context without leaving the keyboard.
+Give a developer a memorable, calm place to revisit recent coding-agent work: scan the recency trail, understand the selected conversation's purpose and latest concrete outcome, then read the complete exchange without leaving the keyboard.
+
+This is a premium conversation journal / field-notes workspace. It is not a database browser with nicer colors.
+
+## Acceptance artifact diagnosis
+
+The rejected medium-pane screen keeps the same database-browser skeleton as the first prototype: a hard vertical split, an always-empty filter row, uniform three-line records, and a generic metadata card followed by a transcript dump. The left pane has no recency rhythm and leaves a large dead area; the right pane gives labels and chrome more authority than the selected purpose or outcome. Lavender is responsible for brand, focus, selection, links, and hierarchy, so nothing feels singular. The header and footer read like framework scaffolding. The composition needs a different reading model, not another palette or spacing pass.
 
 ## Users and environment
 
-- Primary user: a developer reviewing recent Codex, Claude, Pi, Agy, OpenCode, or Clihow work.
-- Host: standalone terminals and tmux panes; sessions are frequent and may stay open while other work continues.
-- Review sizes: `136x65` for the adjacent demonstration pane, `106x30` for the user-reported medium pane, and `90x30` for compact use.
-- Minimum useful size: `72x18`; below that, show a concise resize state instead of broken panes.
-- Keyboard operation is complete. Mouse capture, Nerd Fonts, animation, and truecolor are not required.
-- Color supplements words, row shape, and position; it never carries focus or status alone.
+- Primary user: a developer revisiting recent Codex, Claude, Pi, Agy, OpenCode, or Clihow work.
+- Data source: the real `agentconvos --context --json` payload for the current project.
+- Review canvases: luxurious `150x40`, adjacent-pane `109x33`, and compact `90x30`.
+- Minimum useful canvas: `72x18`; below it, show a deliberate resize state.
+- Keyboard operation is complete. No mouse dependency, Nerd Font, animation, gradient, or fake data.
+- Color supplements labels, shape, position, and spacing; it never carries state alone.
 
 ## Primary tasks
 
 | Task | Frequency | Cost of error | Desired shortest path |
 |---|---:|---:|---|
-| Orient to project and recent work | High | Medium | Launch, read header and selected row |
-| Select another conversation | High | Low | Arrow or `j`/`k`; detail refreshes immediately |
-| Read a complete reply | High | High | `Tab`, then arrows/`j`/`k` or `PgUp`/`PgDn` |
-| Filter recent conversations | Medium | Low | `/`, type, inspect count, `Enter` or `Esc` |
-| Recover from a filter | Medium | Medium | `Esc` clears search and restores prior selection when available |
+| Understand the selected work and outcome | High | High | Launch and read the hero/outcome |
+| Move through recent work | High | Low | Arrow or `j`/`k`; reading sheet updates immediately |
+| Read the complete reply | High | High | `Tab`, then scroll by line/page/to tail |
+| Find a conversation | Medium | Low | `/`, type in the transient search strip, inspect count |
+| Recover from search or compact reading | Medium | Medium | Predictable `Esc` ladder without quitting |
 
 ## Information priority
 
-1. Must dominate immediately: project identity, selected conversation title, and readable conversation content.
-2. Must remain visible during work: result count/position, focus, search state, and detail scroll state.
-3. Useful supporting context: date, source agent, turn count, model, effort, and short conversation ID.
-4. Can move into detail/help: complete first/latest-user/latest-agent messages and secondary key hints.
-5. Can be removed: decorative branding, redundant labels, duplicated first/latest-user text, empty metadata, and ornamental borders.
+1. Selected purpose/title and exact latest outcome.
+2. Human/agent exchange in readable Markdown.
+3. Recent-conversation navigation.
+4. Date, coding agent, turns, model, effort, and short identity.
+5. Contextual key help.
+
+Empty metadata is omitted. When the backend has no summary/recap field, the UI does not invent one: **Latest outcome** is a restrained excerpt of the exact latest agent message, while the full message remains below. Delegated conversations whose prompt was not recorded say so honestly. Identical first/latest-user content is shown once.
 
 ## Interaction contract
 
 ```text
-launch real project context -> orient -> select or filter -> immediate detail feedback -> read/scroll -> select again or clear -> Ctrl+C to leave
+launch real context -> understand selected note -> browse or search -> Tab to read -> scroll complete reply -> Tab back or Esc recover -> Ctrl+C leave
 ```
 
-- Focus order is list then detail. `Tab` and `Shift+Tab` traverse the same two-region cycle.
-- List focus routes arrows and `j`/`k` to selection. Detail focus routes arrows, `j`/`k`, `PgUp`/`PgDn`, Home/End, and `g`/`G` to the viewport.
-- `/` enters the Bubbles filter input and moves focus to the list. Ordinary input is owned by that component.
-- `Enter` accepts an active filter. `Esc` cancels/clears search first; with no temporary state it remains in the app.
-- `Ctrl+C` is the unambiguous exit. There are no destructive actions in this slice.
-- Selection is tracked by stable conversation identity and remains visible, but quieter, while detail is focused.
+- `Tab` and `Shift+Tab` move between the recency feed and reading sheet.
+- Feed focus routes arrows and `j`/`k` to selection; selection refreshes the reading sheet immediately.
+- Reading focus routes arrows and `j`/`k` by line, `PgUp`/`PgDn` by page, and Home/End or `g`/`G` to limits.
+- `/` opens a focused Bubbles search strip. There is no vacant filter row while browsing.
+- Ordinary typing is owned by the search input. `Enter` applies; `Esc` first cancels/clears search.
+- At compact width, `Esc` from the reading mode returns to the feed; it never quits. `Ctrl+C` is the unambiguous exit.
+- Selection is tracked by stable conversation identity across filtering, focus changes, and breakpoints.
 
 ## Aesthetic direction
 
 Desired qualities:
 
 ```text
-1. Calm and confident
-2. Warm and editorial
-3. Purposeful and product-quality
+editorial · tactile · confident · composed · memorable
 ```
 
 Anti-goals:
 
 ```text
-1. Cyber-console decoration
-2. Sterile data dump or timid near-monochrome styling
-3. Rainbow color, nested boxes, or border soup
+database admin · transcript dump · cyber/gamer console · purple everywhere
+border soup · dashboard cards · generic Bubbles defaults
 ```
 
-Density target: balanced and compact enough for continuous browsing.
-
-Reference language: polished Charm applications, with a compact header, meaningful surfaces, full-width selected rows, a strong reading pane, and contextual footer help.
+The visual metaphor is a field journal: a graphite recency trail beside a subtly raised warm reading sheet. Hierarchy comes from composition, measure, type treatment, whitespace, rails, and layered surfaces—not boxes around every region.
 
 ## Semantic visual tokens
 
-- Warm charcoal/ink canvas with one slightly raised panel surface.
-- Soft ivory primary text and legible taupe muted text.
-- One lilac main accent for active focus and primary identity.
-- Deep plum selected row; quieter neutral-plum inactive selection.
-- Amber match treatment for the active query/result explanation.
-- Sage status treatment for scroll state; red reserved for actual errors.
-- Focus is conveyed by an accent rail/title and the footer focus word, not color alone.
-- Plain text labels and common glyphs (`/`, `|`, `>`/`▌`) provide safe fallbacks.
+- `canvas`: near-black graphite, the quiet outer field.
+- `feed`: slightly lifted ink for recent-note navigation.
+- `paper`: warm charcoal/brown-black reading surface.
+- `raised`: a restrained warmer outcome surface.
+- `text`: warm ivory; `muted`: readable taupe; `faint`: subdued structural copy.
+- `signature`: vivid vermilion/coral, reserved for brand, active focus rail, selected marker, and active search cursor.
+- `question`: restrained sea-glass teal for human speaker language.
+- `answer`: ochre/gold for agent/outcome language.
+- `status`: sage for healthy scroll/result state.
+- `selected`: deep ember surface; `inactiveSelected`: quieter warm graphite.
+- `separator`: low-contrast warm graphite used only for authored rules and timeline marks.
+- `error`: reserved red, never decoration.
 
-## Real content samples
+There is no lavender/purple identity color. The signature accent is scarce enough to remain meaningful.
 
-- Long title: `For THIS task you are the sole implementation worker, not an orchestrator.`
-- Current work: `Finish a thin, polished, real-data AgentConvos Bubble Tea UI slice for visual approval.`
-- Metadata: `03 Aug · codex · 10 turns` and `gpt-5.6-sol · max`.
-- Empty result: `No conversations match “bubble tea”. Esc clears the filter.`
-- Startup failure: `agentconvos-tui: load project context: ...` remains a concise stderr error before the alternate screen starts.
-- Long detail: complete Markdown headings, lists, links, emphasis, and fenced Go code ending in a unique tail marker.
+## Composition
+
+### Wide and medium: journal + reading sheet
+
+- A two-line authored masthead integrates `agentconvos`, `FIELD NOTES`, project identity, result count/position, focus, and the compact `/ search` affordance.
+- The recency feed is not boxed. Entries form a timeline rhythm with a marker/rail, one compact title line, and one stable metadata line; date aligns to the far edge. The selected entry is full width.
+- Focused selection uses a vermilion rail/marker and ember field. Inactive selection keeps the same shape with a quieter field and muted rail.
+- A two- or three-cell gutter replaces the hard vertical divider.
+- The reading sheet begins with a large wrapping title, restrained metadata band, and a clearly separated **Latest outcome** excerpt.
+- The exchange follows as an editorial timeline with speaker language: `You opened with`, optional `You asked next`, and `Agent answered`; delegated missing prompts use `Task opened`.
+- The latest reply is complete Glamour v2 Markdown, soft-wrapped to the reading measure and scrollable to the actual final line.
+
+### Compact: intentional single-pane modes
+
+- At `90x30`, the feed and reading sheet are separate full-canvas modes rather than squeezed columns.
+- Feed mode shows the authored masthead, recency trail, selected position, and a small selected-note outcome cue when room permits.
+- Reading mode shows the complete hero/timeline viewport. `Tab` returns to the feed; `Esc` is an additional recovery path.
+- Query, stable selection, focus, and viewport state survive transitions across the breakpoint.
+
+### Search
+
+- Browse state shows only a compact `/ search` affordance in the masthead/footer.
+- Pressing `/` opens a deliberate full-width search strip directly below the masthead, with query, result count, and `Esc clear` language.
+- An applied query collapses back to a compact, explicit filter status; no empty input row remains on screen.
+- Empty results use the feed surface for a concise recovery message and never fabricate detail.
 
 ## Layout matrix
 
-| State | Too small (`<72x18`) | Compact (`90x30`) | Medium (`106x30`) | Wide (`136x65`) |
-|---|---|---|---|---|
-| Initial/populated | Resize message with current/required dimensions | Two panes; compact 34-cell browse rail and flexible detail | Two panes; 42-cell browse rail and inset editorial reading measure | Two panes; approximately 44-cell browse rail and dominant detail |
-| Filtering | Same resize message | Search row stays visible; count becomes `n results of total` | Same, with readable wrapped result titles | Same, with more title/metadata room |
-| Empty filter | Same resize message | Browse pane explains no match; detail repeats recovery cue | Same without wasting the reading surface | Same without wasting the reading surface |
-| Detail focused | Same resize message | Selected row remains as a subdued full-width band | Selection remains visible beneath a concise humanized title | Selected row remains visible; detail focus rail/title is accented |
-| Long content | Same resize message | Soft-wrapped viewport scrolls to the actual tail | Two-cell reader insets preserve a comfortable line measure | Wider Markdown measure with the same complete source content |
+| State | `150x40` | `109x33` | `90x30` |
+|---|---|---|---|
+| Initial | ~42-cell journal feed, 3-cell gutter, luxurious reading sheet | ~36-cell feed, 2-cell gutter, composed reading sheet | Full-width feed mode |
+| Reading focus | Feed remains visible with quiet selection | Same, with narrower hero measure | Full-width reading mode |
+| Search active | Full-width strip below masthead; body loses one row | Same | Full-width strip above feed results |
+| Applied filter | Compact query/count in masthead | Same | Same; single-pane state preserved |
+| Long reply | Complete viewport to actual tail | Complete viewport to actual tail | Full-width viewport to actual tail |
+| Empty results | Recovery copy in feed; no fake reader | Same | Full-width recovery copy |
 
-Every supported canvas uses one header row, one footer row, and a body of exactly `height - 2`. The panes have no nested box borders; one separator and surface changes provide structure. List rows reserve three cells for up to two title lines plus metadata, while the reader keeps two-cell horizontal insets.
+Every supported canvas measures exactly to the reported width/height using Lip Gloss measurement. Header and contextual footer remain on-canvas. The body absorbs optional search-strip height without clipping.
 
-## Keymap
+## Authored chrome
 
-### Global
-
-| Key | Action | Why global |
-|---|---|---|
-| `Ctrl+C` | Quit | Reliable fallback that never conflicts with ordinary text |
-| `Tab` / `Shift+Tab` | Move list/detail focus | Fixed major-region focus order |
-| `/` | Enter filter | Primary retrieval action outside text-entry mode |
-
-### Contextual
-
-| Focus/mode | Key | Action |
-|---|---|---|
-| List | arrows or `j`/`k` | Select conversation and refresh detail |
-| Detail | arrows or `j`/`k` | Scroll by line |
-| Detail | `PgUp`/`PgDn` | Scroll by page |
-| Detail | Home/End or `g`/`G` | Go to beginning/end |
-| Filter | ordinary text/paste | Update Bubbles filtering only |
-| Filter | `Enter` | Apply filter |
-| Filter/applied filter | `Esc` | Cancel or clear, then restore browse context |
+- Masthead tone: publication name + notebook identity, not a logo or dashboard toolbar.
+- Footer tone: calm command bar with contextual groups and a right-aligned state phrase (`BROWSE 04/06`, `READ 62%`, `SEARCH 2/6`).
+- Bubbles help remains meaningful, but its rendered language is composed into the product instead of displayed as a loose default-widget string.
 
 ## Acceptance criteria
 
-- Real `agentconvos --context --json` data populates the application.
-- Context, count/position, focus, query/filter state, and scroll state are visible at a glance.
-- Selection, focus, inactive selection, match/query, and status have distinct treatments.
-- List rows never exceed their declared three-cell height; up to two title lines sit above stable metadata and selected bands fill the pane.
-- Detail content is Glamour v2 Markdown, soft-wrapped, complete, and scrollable to its true tail.
-- `136x65`, `106x30`, and `90x30` render to exact Lip Gloss dimensions with an on-canvas footer.
-- Search owns ordinary typing; its Escape ladder and stable selection are covered by tests.
+- Real `agentconvos --context --json` data populates the UI; no fixtures or inferred summary drive the visible design.
+- Selected title and exact latest-outcome excerpt dominate before metadata and help.
+- Feed entries have a visible recency rhythm, two-line declared delegate height, stable metadata, and full-width active/inactive selection shapes.
+- Search has no permanent vacant row; active input is obvious and owns ordinary typing.
+- Wide and medium use the journal/reading-sheet composition with no hard divider or generic pane card.
+- Compact is a deliberate feed/read mode, preserving state across focus and resize.
+- Conversation Markdown is rendered by Glamour v2, complete, soft-wrapped, and scrollable to its real tail.
+- `150x40`, `109x33`, and `90x30` are exact, footer-on-canvas layouts; `<72x18` is an intentional resize state.
 - No resume, handoff, source-opening, launcher, packaging, or default-command work enters this slice.

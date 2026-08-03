@@ -53,8 +53,8 @@ func (item conversationItem) Description() string {
 	c := item.conversation
 	return strings.Join(nonEmpty(
 		strings.ToLower(c.Source),
-		shortDate(c.Timestamp),
 		turnLabel(c.TurnCount),
+		shortDate(c.Timestamp),
 	), " · ")
 }
 
@@ -68,7 +68,7 @@ type conversationDelegate struct {
 	focused bool
 }
 
-func (d conversationDelegate) Height() int  { return 3 }
+func (d conversationDelegate) Height() int  { return 2 }
 func (d conversationDelegate) Spacing() int { return 0 }
 func (d conversationDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd {
 	return nil
@@ -82,40 +82,35 @@ func (d conversationDelegate) Render(w io.Writer, m list.Model, index int, raw l
 
 	selected := index == m.Index()
 	rowWidth := max(1, m.Width())
-	textWidth := max(1, rowWidth-3)
-	marker := "  "
+	textWidth := max(1, rowWidth-2)
+	marker := "· "
 	if selected {
-		marker = "▌ "
+		marker = "● "
 	}
 
 	titleStyle := lipgloss.NewStyle().
 		Width(rowWidth).
 		Foreground(d.colors.text).
-		Background(d.colors.panel)
+		Background(d.colors.feed)
 	metaStyle := lipgloss.NewStyle().
 		Width(rowWidth).
 		Foreground(d.colors.muted).
-		Background(d.colors.panel)
+		Background(d.colors.feed)
 	if selected {
 		selection := d.colors.selectionInactive
 		if d.focused {
 			selection = d.colors.selection
-			titleStyle = titleStyle.Foreground(d.colors.accent)
+			titleStyle = titleStyle.Foreground(d.colors.signature)
 		}
 		titleStyle = titleStyle.Bold(true).Background(selection)
 		metaStyle = metaStyle.Background(selection)
 	}
 
-	titleLines := wrappedLines(item.Title(), textWidth, 2)
-	lines := make([]string, 0, d.Height())
-	for _, titleLine := range titleLines {
-		lines = append(lines, titleStyle.Render(marker+titleLine))
-	}
-	metadata := marker + compact(item.Description(), textWidth)
-	lines = append(lines, metaStyle.Render(metadata))
-	for len(lines) < d.Height() {
-		lines = append(lines, metaStyle.Render(marker))
-	}
+	title := marker + truncateCells(item.Title(), textWidth)
+	c := item.conversation
+	metaLeft := strings.Join(nonEmpty(strings.ToLower(c.Source), turnLabel(c.TurnCount)), " · ")
+	metadata := "  " + placeSides(textWidth, metaLeft, shortDate(c.Timestamp))
+	lines := []string{titleStyle.Render(title), metaStyle.Render(metadata)}
 	_, _ = io.WriteString(w, strings.Join(lines, "\n"))
 }
 
@@ -125,12 +120,16 @@ var markdownLink = regexp.MustCompile(`\[([^]]+)]\([^)]+\)`)
 
 type palette struct {
 	canvas            color.Color
-	panel             color.Color
+	feed              color.Color
+	paper             color.Color
 	raised            color.Color
 	text              color.Color
 	muted             color.Color
+	faint             color.Color
 	separator         color.Color
-	accent            color.Color
+	signature         color.Color
+	question          color.Color
+	answer            color.Color
 	selection         color.Color
 	selectionInactive color.Color
 	match             color.Color
@@ -140,17 +139,21 @@ type palette struct {
 func newPalette(isDark bool) palette {
 	lightDark := lipgloss.LightDark(isDark)
 	return palette{
-		canvas:            lightDark(lipgloss.Color("#FBF8F6"), lipgloss.Color("#19171B")),
-		panel:             lightDark(lipgloss.Color("#F4EEEC"), lipgloss.Color("#211E23")),
-		raised:            lightDark(lipgloss.Color("#ECE4E4"), lipgloss.Color("#2A252C")),
-		text:              lightDark(lipgloss.Color("#2B252A"), lipgloss.Color("#F3ECEF")),
-		muted:             lightDark(lipgloss.Color("#746A70"), lipgloss.Color("#A99EA5")),
-		separator:         lightDark(lipgloss.Color("#D9CDCF"), lipgloss.Color("#4B4149")),
-		accent:            lightDark(lipgloss.Color("#76529B"), lipgloss.Color("#D1A8E8")),
-		selection:         lightDark(lipgloss.Color("#E5D8EA"), lipgloss.Color("#3A2E40")),
-		selectionInactive: lightDark(lipgloss.Color("#ECE6E8"), lipgloss.Color("#302B31")),
-		match:             lightDark(lipgloss.Color("#9A641F"), lipgloss.Color("#E7B76B")),
-		status:            lightDark(lipgloss.Color("#4F765D"), lipgloss.Color("#9BC5A5")),
+		canvas:            lightDark(lipgloss.Color("#F5F0E7"), lipgloss.Color("#101211")),
+		feed:              lightDark(lipgloss.Color("#EDE7DC"), lipgloss.Color("#171918")),
+		paper:             lightDark(lipgloss.Color("#FFF9ED"), lipgloss.Color("#211F1A")),
+		raised:            lightDark(lipgloss.Color("#F3E7D5"), lipgloss.Color("#2B2720")),
+		text:              lightDark(lipgloss.Color("#29251F"), lipgloss.Color("#F2E8D5")),
+		muted:             lightDark(lipgloss.Color("#736B60"), lipgloss.Color("#A59B8C")),
+		faint:             lightDark(lipgloss.Color("#958C7E"), lipgloss.Color("#6F6A60")),
+		separator:         lightDark(lipgloss.Color("#D5C8B5"), lipgloss.Color("#3A3832")),
+		signature:         lightDark(lipgloss.Color("#C6472C"), lipgloss.Color("#FF6B4A")),
+		question:          lightDark(lipgloss.Color("#347D72"), lipgloss.Color("#70B7A8")),
+		answer:            lightDark(lipgloss.Color("#9B6B19"), lipgloss.Color("#D7A84A")),
+		selection:         lightDark(lipgloss.Color("#F0D6C9"), lipgloss.Color("#38251F")),
+		selectionInactive: lightDark(lipgloss.Color("#E5DED2"), lipgloss.Color("#292621")),
+		match:             lightDark(lipgloss.Color("#8B681F"), lipgloss.Color("#E4BD69")),
+		status:            lightDark(lipgloss.Color("#4F765D"), lipgloss.Color("#91B59A")),
 	}
 }
 
@@ -207,7 +210,7 @@ func defaultKeyMap() keyMap {
 		),
 		Search: key.NewBinding(
 			key.WithKeys("/"),
-			key.WithHelp("/", "filter"),
+			key.WithHelp("/", "search"),
 		),
 		Apply: key.NewBinding(
 			key.WithKeys("enter"),
@@ -237,6 +240,11 @@ func (h activeHelp) FullHelp() [][]key.Binding {
 }
 
 type paneLayout struct {
+	compact      bool
+	headerHeight int
+	searchHeight int
+	footerHeight int
+	gutter       int
 	leftOuter    int
 	rightOuter   int
 	leftContent  int
@@ -293,8 +301,8 @@ func initialModel(payload contextPayload) model {
 	conversationList.SetShowHelp(false)
 	conversationList.SetFilteringEnabled(true)
 	conversationList.DisableQuitKeybindings()
-	conversationList.FilterInput.Prompt = "/ "
-	conversationList.FilterInput.Placeholder = "Filter conversations"
+	conversationList.FilterInput.Prompt = ""
+	conversationList.FilterInput.Placeholder = "type to filter…"
 	conversationList.FilterInput.SetVirtualCursor(false)
 
 	preview := viewport.New()
@@ -343,6 +351,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.selectedID() != before || msg.String() == "esc" {
 				m.refreshPreview()
 			}
+			if msg.String() == "esc" || msg.String() == "enter" {
+				m.resize()
+			}
 			return m, cmd
 		}
 		if msg.String() == "esc" && m.conversations.FilterValue() != "" {
@@ -369,7 +380,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.applyThemeFromPalette()
 			var cmd tea.Cmd
 			m.conversations, cmd = m.conversations.Update(msg)
+			m.resize()
 			return m, cmd
+		}
+		if msg.String() == "esc" && m.layout().compact && m.focus == detailFocus {
+			m.focus = browseFocus
+			m.applyThemeFromPalette()
+			return m, nil
 		}
 		if m.focus == detailFocus {
 			switch msg.String() {
@@ -415,7 +432,7 @@ func (m *model) applyThemeFromPalette() {
 		Underline(true)
 
 	inputStyles := m.conversations.FilterInput.Styles()
-	inputStyles.Cursor.Color = m.colors.accent
+	inputStyles.Cursor.Color = m.colors.signature
 	inputStyles.Focused.Prompt = inputStyles.Focused.Prompt.Foreground(m.colors.match).Bold(true)
 	inputStyles.Focused.Text = inputStyles.Focused.Text.Foreground(m.colors.text)
 	inputStyles.Focused.Placeholder = inputStyles.Focused.Placeholder.Foreground(m.colors.muted)
@@ -425,7 +442,7 @@ func (m *model) applyThemeFromPalette() {
 	inputStyles.Blurred.Placeholder = inputStyles.Blurred.Placeholder.Foreground(m.colors.muted)
 	m.conversations.FilterInput.SetStyles(inputStyles)
 
-	m.help.Styles.ShortKey = lipgloss.NewStyle().Foreground(m.colors.accent).Bold(true)
+	m.help.Styles.ShortKey = lipgloss.NewStyle().Foreground(m.colors.signature).Bold(true)
 	m.help.Styles.ShortDesc = lipgloss.NewStyle().Foreground(m.colors.muted)
 	m.help.Styles.ShortSeparator = lipgloss.NewStyle().Foreground(m.colors.separator)
 }
@@ -433,10 +450,14 @@ func (m *model) applyThemeFromPalette() {
 func (m *model) resize() {
 	atBottom, scrollPercent, preserve := m.previewPosition()
 	layout := m.layout()
-	listHeight := max(1, layout.paneContent-2)
-	previewHeight := max(1, layout.paneContent-1)
+	listHeight := max(1, layout.paneContent-1)
+	if m.showCompactSpotlight() {
+		listHeight = max(1, len(m.conversations.VisibleItems())*(conversationDelegate{}).Height())
+	}
+	previewHeight := max(1, layout.paneContent)
 	m.conversations.SetSize(layout.leftContent, listHeight)
-	m.conversations.FilterInput.SetWidth(max(4, layout.leftContent-4))
+	searchChrome := lipgloss.Width(m.searchPrefix()) + 24
+	m.conversations.FilterInput.SetWidth(max(8, m.width-searchChrome))
 	m.preview.SetWidth(layout.rightContent)
 	m.preview.SetHeight(previewHeight)
 	m.help.SetWidth(max(1, m.width-30))
@@ -445,20 +466,41 @@ func (m *model) resize() {
 }
 
 func (m model) layout() paneLayout {
-	gap := 1
-	leftOuter := 44
-	if m.width < 100 {
-		leftOuter = max(32, m.width*38/100)
-	} else if m.width < 124 {
-		leftOuter = max(40, m.width*40/100)
-	} else if m.width > 150 {
-		leftOuter = min(48, m.width*32/100)
+	headerHeight := 2
+	footerHeight := 1
+	searchHeight := 0
+	if m.conversations.SettingFilter() {
+		searchHeight = 1
 	}
-	leftOuter = min(leftOuter, max(1, m.width-gap-40))
+	compactMode := m.width < 100
+	gap := 2
+	leftOuter := 37
+	if m.width >= 140 {
+		gap = 3
+		leftOuter = 42
+	} else if m.width >= 120 {
+		leftOuter = 40
+	}
+	if compactMode {
+		gap = 0
+		leftOuter = m.width
+	}
+	leftOuter = min(leftOuter, max(1, m.width-gap-42))
+	if compactMode {
+		leftOuter = m.width
+	}
 	rightOuter := max(1, m.width-gap-leftOuter)
+	if compactMode {
+		rightOuter = m.width
+	}
 	rightInset := 2
-	bodyHeight := max(6, m.height-2)
+	bodyHeight := max(1, m.height-headerHeight-searchHeight-footerHeight)
 	return paneLayout{
+		compact:      compactMode,
+		headerHeight: headerHeight,
+		searchHeight: searchHeight,
+		footerHeight: footerHeight,
+		gutter:       gap,
 		leftOuter:    leftOuter,
 		rightOuter:   rightOuter,
 		leftContent:  leftOuter,
@@ -542,26 +584,31 @@ func (m *model) refreshPreview() {
 
 	title := readingTitle(c)
 	metadata := strings.Join(nonEmpty(
-		strings.ToLower(c.Source),
 		editorialDate(c.Timestamp),
+		strings.ToLower(c.Source),
 		turnLabel(c.TurnCount),
 		shortID(c.UUID),
 	), " · ")
 	technical := strings.Join(nonEmpty(c.Model, c.Effort), " · ")
 	firstMessage := c.FirstMessage
-	if titleCarriesOpening(title, firstMessage, max(8, m.preview.Width()-2)) {
-		firstMessage = ""
-	}
 	latestUser := c.LastUserMessage
 	if strings.TrimSpace(latestUser) == strings.TrimSpace(c.FirstMessage) {
 		latestUser = ""
 	}
+	delegated := isDelegatedTask(c.FirstMessage)
+	heroSpeaker := "You asked"
+	if delegated {
+		heroSpeaker = "Task opened"
+		firstMessage = ""
+	} else if titleCarriesOpening(title, firstMessage, max(8, m.preview.Width()-2)) {
+		firstMessage = ""
+	}
 
 	parts := nonEmpty(
-		m.readingHeader(title, metadata, technical),
-		m.markdownSection("OPENING MESSAGE", firstMessage),
-		m.markdownSection("LATEST USER MESSAGE", latestUser),
-		m.markdownSection("LATEST REPLY", c.LastAgentMessage),
+		m.readingHeader(heroSpeaker, title, metadata, technical, latestOutcome(c)),
+		m.timelineSection("You opened with", firstMessage, m.colors.question),
+		m.timelineSection("You asked next", latestUser, m.colors.question),
+		m.timelineSection("Agent answered", c.LastAgentMessage, m.colors.answer),
 	)
 	m.preview.SetContent(strings.Join(parts, "\n\n"))
 	m.preview.GotoTop()
@@ -578,38 +625,54 @@ func (m model) View() tea.View {
 	}
 
 	layout := m.layout()
-	left := lipgloss.NewStyle().
-		Width(layout.leftOuter).
-		Height(layout.bodyHeight).
-		Background(m.colors.panel).
-		Render(m.listView(layout.leftContent))
-	reader := lipgloss.NewStyle().
-		Width(layout.rightOuter).
-		Height(max(1, layout.bodyHeight-1)).
-		PaddingLeft(2).
-		PaddingRight(2).
-		Background(m.colors.canvas).
-		Render(m.preview.View())
-	rightContent := m.paneHeading("Conversation detail", m.focus == detailFocus, layout.rightOuter) + "\n" + reader
-	right := lipgloss.NewStyle().
-		Width(layout.rightOuter).
-		Height(layout.bodyHeight).
-		Background(m.colors.canvas).
-		Render(rightContent)
-	separatorText := strings.TrimSuffix(strings.Repeat("│\n", layout.bodyHeight), "\n")
-	separator := lipgloss.NewStyle().
-		Width(1).
-		Height(layout.bodyHeight).
-		Foreground(m.colors.separator).
-		Background(m.colors.canvas).
-		Render(separatorText)
-	body := lipgloss.JoinHorizontal(lipgloss.Top, left, separator, right)
+	var body string
+	if layout.compact {
+		if m.focus == browseFocus {
+			body = lipgloss.NewStyle().
+				Width(m.width).
+				Height(layout.bodyHeight).
+				Background(m.colors.feed).
+				Render(m.listView(m.width))
+		} else {
+			body = lipgloss.NewStyle().
+				Width(m.width).
+				Height(layout.bodyHeight).
+				PaddingLeft(2).
+				PaddingRight(2).
+				Background(m.colors.paper).
+				Render(m.preview.View())
+		}
+	} else {
+		left := lipgloss.NewStyle().
+			Width(layout.leftOuter).
+			Height(layout.bodyHeight).
+			Background(m.colors.feed).
+			Render(m.listView(layout.leftContent))
+		gutter := lipgloss.NewStyle().
+			Width(layout.gutter).
+			Height(layout.bodyHeight).
+			Background(m.colors.canvas).
+			Render("")
+		right := lipgloss.NewStyle().
+			Width(layout.rightOuter).
+			Height(layout.bodyHeight).
+			PaddingLeft(2).
+			PaddingRight(2).
+			Background(m.colors.paper).
+			Render(m.preview.View())
+		body = lipgloss.JoinHorizontal(lipgloss.Top, left, gutter, right)
+	}
+	rows := []string{m.header()}
+	if m.conversations.SettingFilter() {
+		rows = append(rows, m.searchView(m.width))
+	}
+	rows = append(rows, body, m.footer())
 	canvas := lipgloss.NewStyle().
 		Width(m.width).
 		Height(m.height).
 		Background(m.colors.canvas).
 		Foreground(m.colors.text).
-		Render(strings.Join([]string{m.header(), body, m.footer()}, "\n"))
+		Render(strings.Join(rows, "\n"))
 	view := tea.NewView(canvas)
 	view.AltScreen = true
 	view.BackgroundColor = m.colors.canvas
@@ -618,8 +681,8 @@ func (m model) View() tea.View {
 	if m.conversations.SettingFilter() {
 		if cursor := m.conversations.FilterInput.Cursor(); cursor != nil {
 			adjusted := *cursor
-			adjusted.X += 2
-			adjusted.Y += 2
+			adjusted.X += lipgloss.Width(m.searchPrefix())
+			adjusted.Y += layout.headerHeight
 			view.Cursor = &adjusted
 		}
 	}
@@ -627,7 +690,7 @@ func (m model) View() tea.View {
 }
 
 func (m model) tooSmallView() tea.View {
-	title := lipgloss.NewStyle().Bold(true).Foreground(m.colors.accent).Render("AgentConvos")
+	title := lipgloss.NewStyle().Bold(true).Foreground(m.colors.signature).Render("AgentConvos")
 	dimensions := lipgloss.NewStyle().Foreground(m.colors.text).Render(
 		fmt.Sprintf("needs at least %dx%d · current %dx%d", minimumWidth, minimumHeight, m.width, m.height),
 	)
@@ -652,26 +715,110 @@ func (m model) tooSmallView() tea.View {
 func (m model) header() string {
 	brand := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(m.colors.accent).
+		Foreground(m.colors.signature).
 		Render("agentconvos")
-	project := lipgloss.NewStyle().Bold(true).Foreground(m.colors.text).Render(filepath.Base(m.data.Project))
-	left := " " + brand + "  " + project
-	right := strings.Join([]string{
-		lipgloss.NewStyle().Foreground(m.colors.muted).Render(m.resultCount()),
-		m.position(),
-	}, "  ") + " "
-	return lipgloss.NewStyle().
+	journal := lipgloss.NewStyle().Bold(true).Foreground(m.colors.answer).Render("FIELD NOTES")
+	firstLeft := " " + brand + "  " + journal
+	firstRight := lipgloss.NewStyle().Foreground(m.colors.muted).Render(m.resultCount()) + " "
+	first := lipgloss.NewStyle().
 		Width(m.width).
-		Background(m.colors.panel).
-		Render(placeSides(m.width, left, right))
+		Background(m.colors.canvas).
+		Render(placeSides(m.width, firstLeft, firstRight))
+
+	project := lipgloss.NewStyle().Bold(true).Foreground(m.colors.text).Render(filepath.Base(m.data.Project))
+	secondLeft := " " + project
+	secondRight := ""
+	query := strings.TrimSpace(m.conversations.FilterValue())
+	if m.conversations.SettingFilter() {
+		secondRight = lipgloss.NewStyle().Bold(true).Foreground(m.colors.signature).Render("SEARCH") + "  " + m.position() + "  "
+	} else if query != "" {
+		filter := lipgloss.NewStyle().Bold(true).Foreground(m.colors.match).Render("FILTER")
+		secondRight = filter + " " + lipgloss.NewStyle().Foreground(m.colors.text).Render(query) + "  " +
+			lipgloss.NewStyle().Foreground(m.colors.status).Render(m.resultCount()) + "  "
+	} else {
+		focus := "BROWSE"
+		if m.focus == detailFocus {
+			focus = "READ"
+		}
+		secondRight = lipgloss.NewStyle().Foreground(m.colors.faint).Render(focus) + "  " +
+			m.position() + "  " + lipgloss.NewStyle().Foreground(m.colors.muted).Render("/ search") + " "
+	}
+	second := lipgloss.NewStyle().
+		Width(m.width).
+		Background(m.colors.canvas).
+		Render(placeSides(m.width, secondLeft, secondRight))
+	return first + "\n" + second
 }
 
 func (m model) listView(width int) string {
-	return strings.Join([]string{
-		m.paneHeading("Recent conversations", m.focus == browseFocus, width),
-		m.searchView(width),
-		m.conversations.View(),
-	}, "\n")
+	marker := lipgloss.NewStyle().Foreground(m.colors.faint).Render("○")
+	headingStyle := lipgloss.NewStyle().Bold(true).Foreground(m.colors.muted)
+	if m.focus == browseFocus {
+		marker = lipgloss.NewStyle().Foreground(m.colors.signature).Render("●")
+		headingStyle = headingStyle.Foreground(m.colors.text)
+	}
+	heading := lipgloss.NewStyle().
+		Width(max(1, width)).
+		Background(m.colors.feed).
+		Render(" " + marker + "  " + headingStyle.Render("RECENT NOTES"))
+	if len(m.conversations.VisibleItems()) == 0 {
+		query := strings.TrimSpace(m.conversations.FilterValue())
+		message := "No recent notes are available."
+		if query != "" {
+			message = fmt.Sprintf("No conversations match %q.\n\nEsc clears the filter.", query)
+		}
+		empty := lipgloss.NewStyle().
+			Width(max(1, width)).
+			PaddingLeft(4).
+			PaddingTop(1).
+			Foreground(m.colors.muted).
+			Background(m.colors.feed).
+			Render(message)
+		return heading + "\n" + empty
+	}
+	parts := []string{heading, m.conversations.View()}
+	if m.showCompactSpotlight() {
+		parts = append(parts, "", m.compactSpotlight(width))
+	}
+	return strings.Join(parts, "\n")
+}
+
+func (m model) showCompactSpotlight() bool {
+	layout := m.layout()
+	if !layout.compact || m.focus != browseFocus || m.conversations.SettingFilter() {
+		return false
+	}
+	visible := len(m.conversations.VisibleItems())
+	if visible == 0 {
+		return false
+	}
+	c, ok := m.selectedConversation()
+	if !ok || firstTextLine(latestOutcome(c)) == "" {
+		return false
+	}
+	entryRows := visible * (conversationDelegate{}).Height()
+	return entryRows+7 <= layout.paneContent-1
+}
+
+func (m model) compactSpotlight(width int) string {
+	c, ok := m.selectedConversation()
+	if !ok {
+		return ""
+	}
+	outcome := firstTextLine(latestOutcome(c))
+	if outcome == "" {
+		return ""
+	}
+	label := lipgloss.NewStyle().Bold(true).Foreground(m.colors.answer).Render("ON THIS NOTE")
+	ruleWidth := max(0, width-lipgloss.Width("  ON THIS NOTE  ")-2)
+	rule := lipgloss.NewStyle().Foreground(m.colors.separator).Render(strings.Repeat("─", ruleWidth))
+	heading := "  " + label
+	if ruleWidth > 0 {
+		heading += "  " + rule
+	}
+	body := strings.Join(wrappedLines(outcome, max(1, width-6), 3), "\n")
+	body = lipgloss.NewStyle().PaddingLeft(4).Foreground(m.colors.text).Render(body)
+	return heading + "\n" + body
 }
 
 func (m model) footer() string {
@@ -679,47 +826,42 @@ func (m model) footer() string {
 	focusLabel := "BROWSE"
 	if m.conversations.SettingFilter() {
 		bindings = []key.Binding{m.keys.Apply, m.keys.Clear}
-		focusLabel = "FILTER"
+		focusLabel = "SEARCH"
 	} else if m.focus == detailFocus {
 		bindings = []key.Binding{m.keys.Scroll, m.keys.Page, m.keys.Ends, m.keys.BrowsePane, m.keys.Search, m.keys.Quit}
-		focusLabel = "READING"
+		if m.layout().compact {
+			bindings = []key.Binding{m.keys.Scroll, m.keys.Page, m.keys.BrowsePane, m.keys.Quit}
+		}
+		focusLabel = "READ"
 	}
 	keys := m.help.View(activeHelp{bindings: bindings})
-	right := strings.Join([]string{
-		lipgloss.NewStyle().Bold(true).Foreground(m.colors.accent).Render(focusLabel),
-		m.position(),
-		lipgloss.NewStyle().Foreground(m.colors.status).Render(m.scrollState()),
-	}, "  ")
+	state := ""
+	if !m.conversations.SettingFilter() && m.focus == detailFocus {
+		state = m.position() + "  " + lipgloss.NewStyle().Foreground(m.colors.status).Render(m.scrollState())
+	}
+	right := lipgloss.NewStyle().Bold(true).Foreground(m.colors.signature).Render(focusLabel)
+	if state != "" {
+		right += "  " + state
+	}
 	return lipgloss.NewStyle().
 		Width(m.width).
-		Background(m.colors.panel).
+		Background(m.colors.feed).
 		Render(placeSides(m.width, " "+keys, right+" "))
 }
 
-func (m model) paneHeading(label string, focused bool, width int) string {
-	style := lipgloss.NewStyle().
-		Width(max(1, width)).
-		MaxWidth(max(1, width)).
-		Background(m.colors.panel).
-		Foreground(m.colors.muted)
-	marker := "  "
-	if focused {
-		style = style.Bold(true).Foreground(m.colors.accent).Background(m.colors.raised)
-		marker = "▌ "
-	}
-	return style.Render(marker + label)
+func (m model) searchPrefix() string {
+	return "  SEARCH FIELD NOTES  "
 }
 
 func (m model) searchView(width int) string {
-	style := lipgloss.NewStyle().
+	label := lipgloss.NewStyle().Bold(true).Foreground(m.colors.signature).Render(m.searchPrefix())
+	left := label + m.conversations.FilterInput.View()
+	right := lipgloss.NewStyle().Foreground(m.colors.status).Render(m.resultCount()) +
+		lipgloss.NewStyle().Foreground(m.colors.muted).Render("  Esc clear  ")
+	return lipgloss.NewStyle().
 		Width(max(1, width)).
-		MaxWidth(max(1, width)).
-		Background(m.colors.panel).
-		Foreground(m.colors.muted)
-	if m.conversations.SettingFilter() || m.conversations.FilterValue() != "" {
-		style = style.Background(m.colors.raised)
-	}
-	return style.Render("  " + m.conversations.FilterInput.View())
+		Background(m.colors.raised).
+		Render(placeSides(width, left, right))
 }
 
 func (m model) resultCount() string {
@@ -735,12 +877,16 @@ func (m model) resultCount() string {
 }
 
 func (m model) position() string {
+	return lipgloss.NewStyle().Foreground(m.colors.text).Render(m.positionText())
+}
+
+func (m model) positionText() string {
 	visible := len(m.conversations.VisibleItems())
 	current := 0
 	if visible > 0 {
 		current = min(m.conversations.Index()+1, visible)
 	}
-	return lipgloss.NewStyle().Foreground(m.colors.text).Render(fmt.Sprintf("%d / %d", current, visible))
+	return fmt.Sprintf("%d / %d", current, visible)
 }
 
 func (m model) scrollState() string {
@@ -766,25 +912,27 @@ func placeSides(width int, left, right string) string {
 	return left + strings.Repeat(" ", gap) + right
 }
 
-func (m model) markdownSection(label, text string) string {
+func (m model) timelineSection(label, text string, tone color.Color) string {
 	if strings.TrimSpace(text) == "" {
 		return ""
 	}
-	headingStyle := lipgloss.NewStyle().Bold(true).Foreground(m.colors.accent)
-	heading := headingStyle.Render(label)
-	ruleWidth := max(0, m.preview.Width()-lipgloss.Width(label)-1)
+	headingStyle := lipgloss.NewStyle().Bold(true).Foreground(tone)
+	heading := "  " + headingStyle.Render("●  "+label)
+	ruleWidth := max(0, m.preview.Width()-lipgloss.Width("  ●  "+label)-2)
 	if ruleWidth > 0 {
 		rule := lipgloss.NewStyle().Foreground(m.colors.separator).Render(strings.Repeat("─", ruleWidth))
-		heading += " " + rule
+		heading += "  " + rule
 	}
-	content := m.renderMarkdown(text)
+	content := lipgloss.NewStyle().PaddingLeft(3).Render(m.renderMarkdown(text))
 	return heading + "\n" + content
 }
 
-func (m model) readingHeader(title, metadata, technical string) string {
+func (m model) readingHeader(speaker, title, metadata, technical, outcome string) string {
 	width := max(1, m.preview.Width())
 	contentWidth := max(1, width-2)
 	background := m.colors.raised
+	eyebrowStyle := lipgloss.NewStyle().Bold(true).Foreground(m.colors.signature).Background(background)
+	speakerStyle := lipgloss.NewStyle().Bold(true).Foreground(m.colors.question).Background(background)
 	titleStyle := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(m.colors.text).
@@ -793,15 +941,22 @@ func (m model) readingHeader(title, metadata, technical string) string {
 		Foreground(m.colors.muted).
 		Background(background)
 	technicalStyle := lipgloss.NewStyle().
-		Foreground(m.colors.match).
+		Foreground(m.colors.answer).
 		Background(background)
 
-	lines := []string{titleStyle.Render(strings.Join(wrappedLines(title, contentWidth, 2), "\n"))}
+	eyebrow := eyebrowStyle.Render("FIELD NOTE "+m.positionText()) + "  " + speakerStyle.Render(speaker)
+	titleLines := lipgloss.Wrap(strings.TrimSpace(title), contentWidth, " -_/")
+	lines := []string{eyebrow, titleStyle.Render(titleLines)}
 	if metadata != "" {
 		lines = append(lines, metaStyle.Render(metadata))
 	}
 	if technical != "" {
 		lines = append(lines, technicalStyle.Render(technical))
+	}
+	if strings.TrimSpace(outcome) != "" {
+		outcomeLabel := lipgloss.NewStyle().Bold(true).Foreground(m.colors.answer).Background(background).Render("Latest outcome")
+		outcomeBody := lipgloss.NewStyle().Foreground(m.colors.text).Background(background).Render(m.renderMarkdown(outcome))
+		lines = append(lines, "", outcomeLabel, outcomeBody)
 	}
 	return lipgloss.NewStyle().
 		Width(width).
@@ -820,7 +975,7 @@ func (m model) renderMarkdown(markdown string) string {
 	zero := uint(0)
 	text := terminalColor(m.colors.text)
 	muted := terminalColor(m.colors.muted)
-	accent := terminalColor(m.colors.accent)
+	accent := terminalColor(m.colors.signature)
 	match := terminalColor(m.colors.match)
 	raised := terminalColor(m.colors.raised)
 	style.Document.Margin = &zero
@@ -887,6 +1042,35 @@ func conversationTitle(c conversation) string {
 
 func readingTitle(c conversation) string {
 	return conversationTitle(c)
+}
+
+func latestOutcome(c conversation) string {
+	if summary := strings.TrimSpace(c.Summary); summary != "" {
+		return summary
+	}
+	return firstParagraph(c.LastAgentMessage)
+}
+
+func firstParagraph(value string) string {
+	value = strings.ReplaceAll(value, "\r\n", "\n")
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	for _, paragraph := range strings.Split(value, "\n\n") {
+		if paragraph = strings.TrimSpace(paragraph); paragraph != "" {
+			for _, line := range strings.Split(paragraph, "\n") {
+				if line = strings.TrimSpace(line); line != "" {
+					return line
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func isDelegatedTask(value string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(value)), "[delegated task]")
 }
 
 func firstTextLine(value string) string {

@@ -41,7 +41,7 @@ func TestHeaderKeepsProjectContextQuiet(t *testing.T) {
 	m.width = 110
 
 	header := ansiSequence.ReplaceAllString(m.header(), "")
-	for _, wanted := range []string{"agentconvos", "convo-explorer", "2 conversations"} {
+	for _, wanted := range []string{"agentconvos", "FIELD NOTES", "convo-explorer", "2 conversations", "/ search"} {
 		if !strings.Contains(header, wanted) {
 			t.Fatalf("expected quiet project context %q in header:\n%s", wanted, header)
 		}
@@ -71,7 +71,7 @@ func TestConversationListPrioritizesContentOverChrome(t *testing.T) {
 	m.resize()
 
 	list := ansiSequence.ReplaceAllString(m.listView(52), "")
-	for _, wanted := range []string{"Recent conversations", "Build the polished public README", "codex · 02 Aug · 5 turns"} {
+	for _, wanted := range []string{"RECENT NOTES", "Build the polished public README", "codex", "5 turns", "02 Aug"} {
 		if !strings.Contains(list, wanted) {
 			t.Fatalf("expected content-first list detail %q:\n%s", wanted, list)
 		}
@@ -104,10 +104,10 @@ func TestConversationListHumanizesAndWrapsDelegatedTaskTitles(t *testing.T) {
 	if got, want := lipgloss.Height(rendered.String()), delegate.Height(); got != want {
 		t.Fatalf("expected delegate output to honor its declared height: got %d, want %d:\n%s", got, want, plain)
 	}
-	if delegate.Height() != 3 {
-		t.Fatalf("expected two title lines plus metadata, got delegate height %d", delegate.Height())
+	if delegate.Height() != 2 {
+		t.Fatalf("expected one compact title line plus metadata, got delegate height %d", delegate.Height())
 	}
-	for _, wanted := range []string{"README green CLI", "codex · 02 Aug · 6 turns"} {
+	for _, wanted := range []string{"README green CLI", "codex · 6 turns", "02 Aug"} {
 		if !strings.Contains(plain, wanted) {
 			t.Fatalf("expected readable list content %q:\n%s", wanted, plain)
 		}
@@ -138,7 +138,7 @@ func TestShortSelectedRowKeepsMetadataDirectlyUnderTitle(t *testing.T) {
 	if len(lines) != delegate.Height() {
 		t.Fatalf("expected exactly %d reserved row lines, got %d:\n%s", delegate.Height(), len(lines), rendered.String())
 	}
-	if !strings.Contains(lines[0], "README green CLI") || !strings.Contains(lines[1], "codex · 02 Aug · 6 turns") {
+	if !strings.Contains(lines[0], "README green CLI") || !strings.Contains(lines[1], "codex · 6 turns") || !strings.Contains(lines[1], "02 Aug") {
 		t.Fatalf("expected title then metadata without an empty line between them:\n%s", rendered.String())
 	}
 }
@@ -162,7 +162,7 @@ func TestPreviewUsesComposedConversationLanguage(t *testing.T) {
 	m.refreshPreview()
 
 	preview := ansiSequence.ReplaceAllString(m.preview.View(), "")
-	for _, wanted := range []string{"019fc465", "codex", "gpt-5.6-sol · max", "LATEST REPLY"} {
+	for _, wanted := range []string{"FIELD NOTE", "019fc465", "codex", "gpt-5.6-sol · max", "Latest outcome", "Agent answered"} {
 		if !strings.Contains(preview, wanted) {
 			t.Fatalf("expected plain conversation detail %q in preview:\n%s", wanted, preview)
 		}
@@ -188,7 +188,7 @@ func TestReadingHeaderUsesOneEditorialMetadataRhythm(t *testing.T) {
 	}, 106, 30)
 
 	preview := ansiSequence.ReplaceAllString(m.preview.GetContent(), "")
-	if !strings.Contains(preview, "codex · 02 Aug 2026 · 6 turns · 019fc465") {
+	if !strings.Contains(preview, "02 Aug 2026 · codex · 6 turns · 019fc465") {
 		t.Fatalf("expected one readable metadata rhythm:\n%s", preview)
 	}
 	if strings.Contains(preview, "2026-08-02") {
@@ -196,7 +196,7 @@ func TestReadingHeaderUsesOneEditorialMetadataRhythm(t *testing.T) {
 	}
 }
 
-func TestMediumLayoutUsesAnInsetReadingMeasureAndSectionLandmarks(t *testing.T) {
+func TestMediumLayoutUsesAJournalGutterAndReadingLandmarks(t *testing.T) {
 	m := sizedModel(contextPayload{
 		Project: "/work/convo-explorer",
 		Conversations: []conversation{{
@@ -209,34 +209,34 @@ func TestMediumLayoutUsesAnInsetReadingMeasureAndSectionLandmarks(t *testing.T) 
 			FirstMessage:     "[delegated task] readme_green_cli (prompt not recorded)",
 			LastAgentMessage: "Created the polished README draft.",
 		}},
-	}, 106, 30)
+	}, 109, 33)
 
 	layout := m.layout()
 	if got, want := layout.rightContent, layout.rightOuter-4; got != want {
 		t.Fatalf("expected a two-cell reading inset on both sides: got content %d in outer width %d, want %d", got, layout.rightOuter, want)
 	}
+	gutter := m.width - layout.leftOuter - layout.rightOuter
+	if gutter < 2 {
+		t.Fatalf("expected whitespace gutter between journal and reading sheet, got %d", gutter)
+	}
 
 	view := m.View().Content
 	plain := ansiSequence.ReplaceAllString(view, "")
-	for _, wanted := range []string{"Recent conversations", "Conversation detail", "README green CLI", "OPENING MESSAGE", "LATEST REPLY"} {
+	for _, wanted := range []string{"RECENT NOTES", "README green CLI", "Latest outcome", "Task opened", "Agent answered"} {
 		if !strings.Contains(plain, wanted) {
 			t.Fatalf("expected composed medium-screen landmark %q:\n%s", wanted, plain)
 		}
 	}
-	if got := lipgloss.Width(view); got != 106 {
-		t.Fatalf("expected exact 106-column canvas, got %d", got)
+	for _, rejected := range []string{"Conversation detail", "Recent conversations", "│"} {
+		if strings.Contains(plain, rejected) {
+			t.Fatalf("expected journal composition without rejected chrome %q:\n%s", rejected, plain)
+		}
 	}
-	if got := lipgloss.Height(view); got != 30 {
-		reader := lipgloss.NewStyle().
-			Width(layout.rightOuter).
-			Height(max(1, layout.bodyHeight-1)).
-			PaddingLeft(2).
-			PaddingRight(2).
-			Render(m.preview.View())
-		rightContent := m.paneHeading("Conversation detail", false, layout.rightOuter) + "\n" + reader
-		t.Fatalf("expected exact 30-row canvas, got %d (list=%d list-view=%d preview=%d reader=%d right=%d body=%d)",
-			got, lipgloss.Height(m.conversations.View()), lipgloss.Height(m.listView(layout.leftContent)),
-			lipgloss.Height(m.preview.View()), lipgloss.Height(reader), lipgloss.Height(rightContent), layout.bodyHeight)
+	if got := lipgloss.Width(view); got != 109 {
+		t.Fatalf("expected exact 109-column canvas, got %d", got)
+	}
+	if got := lipgloss.Height(view); got != 33 {
+		t.Fatalf("expected exact 33-row canvas, got %d", got)
 	}
 }
 
@@ -256,7 +256,7 @@ func TestPreviewDoesNotRepeatShortOpeningWhenTitleCarriesIt(t *testing.T) {
 	if strings.Count(preview, request) != 1 {
 		t.Fatalf("expected a short opening to appear once as the reading title:\n%s", preview)
 	}
-	if strings.Contains(preview, "OPENING MESSAGE") {
+	if strings.Contains(preview, "You opened with") {
 		t.Fatalf("expected no redundant opening section when the title preserves it:\n%s", preview)
 	}
 }
@@ -328,7 +328,7 @@ func TestPreviewOmitsLatestUserSectionWhenBackendOmitsMessage(t *testing.T) {
 	}, 100, 24)
 
 	preview := ansiSequence.ReplaceAllString(m.preview.GetContent(), "")
-	if strings.Contains(preview, "LATEST USER MESSAGE") {
+	if strings.Contains(preview, "You asked next") {
 		t.Fatalf("expected omitted backend field not to create a duplicate latest-user section:\n%s", preview)
 	}
 	if strings.Count(preview, "Only request") != 1 {
@@ -348,7 +348,7 @@ func TestTabSwitchesToDetailSpecificHelp(t *testing.T) {
 	}, 110, 30)
 
 	browseHelp := ansiSequence.ReplaceAllString(m.footer(), "")
-	if !strings.Contains(browseHelp, "↑/↓ j/k move") || !strings.Contains(browseHelp, "/ filter") {
+	if !strings.Contains(browseHelp, "↑/↓ j/k move") || !strings.Contains(browseHelp, "/ search") {
 		t.Fatalf("expected browse-specific key hints:\n%s", browseHelp)
 	}
 
@@ -415,7 +415,7 @@ func TestDetailFocusCanReachTheActualReplyTail(t *testing.T) {
 	}
 }
 
-func TestSlashFilterIsVisibleAndEscapeClearsIt(t *testing.T) {
+func TestSlashSearchIsTransientVisibleAndEscapeClearsIt(t *testing.T) {
 	m := sizedModel(contextPayload{
 		Project: "/work/convo-explorer",
 		Conversations: []conversation{
@@ -424,18 +424,28 @@ func TestSlashFilterIsVisibleAndEscapeClearsIt(t *testing.T) {
 		},
 	}, 110, 30)
 
+	browsing := ansiSequence.ReplaceAllString(m.View().Content, "")
+	if strings.Contains(browsing, "Filter conversations") {
+		t.Fatalf("expected no vacant search input while browsing:\n%s", browsing)
+	}
+
 	m = press(m, '/', "/")
 	if !m.conversations.SettingFilter() {
 		t.Fatal("expected slash to focus the Bubbles filter input")
 	}
 	m.conversations.SetFilterText("needle")
+	m.conversations.SetFilterState(list.Filtering)
 	m.refreshPreview()
 
 	filtered := ansiSequence.ReplaceAllString(m.View().Content, "")
 	if len(m.conversations.VisibleItems()) != 1 {
 		t.Fatalf("expected one filtered item, got %d", len(m.conversations.VisibleItems()))
 	}
-	for _, wanted := range []string{"needle", "1 result", "Needle session"} {
+	activeHeader := ansiSequence.ReplaceAllString(m.header(), "")
+	if !strings.Contains(activeHeader, "SEARCH") || !strings.Contains(activeHeader, "1 / 1") {
+		t.Fatalf("expected active search masthead to preserve selected position:\n%s", activeHeader)
+	}
+	for _, wanted := range []string{"SEARCH FIELD NOTES", "needle", "1 result", "1 / 1", "Needle session", "Esc clear"} {
 		if !strings.Contains(strings.ToLower(filtered), strings.ToLower(wanted)) {
 			t.Fatalf("expected visible filter state %q:\n%s", wanted, filtered)
 		}
@@ -481,7 +491,7 @@ func TestSelectedConversationRowsFillTheListWidth(t *testing.T) {
 	}
 }
 
-func TestCompactLayoutKeepsBothPanesAndScrollStatusOnCanvas(t *testing.T) {
+func TestCompactLayoutUsesDeliberateFeedAndReadingModes(t *testing.T) {
 	m := sizedModel(contextPayload{
 		Project: "/work/convo-explorer",
 		Conversations: []conversation{
@@ -492,10 +502,13 @@ func TestCompactLayoutKeepsBothPanesAndScrollStatusOnCanvas(t *testing.T) {
 
 	view := m.View().Content
 	plain := ansiSequence.ReplaceAllString(view, "")
-	for _, wanted := range []string{"Recent", "Conversation", "TOP", "1 / 2"} {
+	for _, wanted := range []string{"RECENT NOTES", "First conversation", "BROWSE", "1 / 2"} {
 		if !strings.Contains(plain, wanted) {
 			t.Fatalf("expected compact layout status %q:\n%s", wanted, plain)
 		}
+	}
+	if strings.Contains(plain, "Agent answered") {
+		t.Fatalf("expected compact browse mode not to squeeze in the reading sheet:\n%s", plain)
 	}
 	if got := lipgloss.Width(view); got != 90 {
 		t.Fatalf("expected 90-column canvas, got %d", got)
@@ -505,8 +518,21 @@ func TestCompactLayoutKeepsBothPanesAndScrollStatusOnCanvas(t *testing.T) {
 	}
 	lines := strings.Split(ansiSequence.ReplaceAllString(view, ""), "\n")
 	lastVisibleLine := lines[min(29, len(lines)-1)]
-	if !strings.Contains(lastVisibleLine, "BROWSE") || !strings.Contains(lastVisibleLine, "TOP") {
-		t.Fatalf("expected focus help and scroll state on the last visible row, got:\n%s", lastVisibleLine)
+	if !strings.Contains(lastVisibleLine, "BROWSE") {
+		t.Fatalf("expected browse state on the last visible row, got:\n%s", lastVisibleLine)
+	}
+
+	m = press(m, tea.KeyTab, "")
+	reading := ansiSequence.ReplaceAllString(m.View().Content, "")
+	if !strings.Contains(reading, "Agent answered") || !strings.Contains(reading, "READ") {
+		t.Fatalf("expected compact Tab to open the full-width reading mode:\n%s", reading)
+	}
+	if strings.Contains(reading, "RECENT NOTES") {
+		t.Fatalf("expected compact reading mode not to squeeze in the feed:\n%s", reading)
+	}
+	m = press(m, tea.KeyEscape, "")
+	if m.focus != browseFocus {
+		t.Fatalf("expected compact Escape to return to the feed, got focus %v", m.focus)
 	}
 }
 
@@ -527,16 +553,16 @@ func TestListDelegateNeverRendersMoreLinesThanItDeclares(t *testing.T) {
 	delegate := conversationDelegate{colors: m.colors, focused: true}
 	delegate.Render(&rendered, m.conversations, 0, item)
 	if got, want := lipgloss.Height(rendered.String()), delegate.Height(); got != want {
-		t.Fatalf("expected delegate output to honor its three-line height, got %d:\n%s", got, rendered.String())
+		t.Fatalf("expected delegate output to honor its two-line height, got %d:\n%s", got, rendered.String())
 	}
 	viewLines := strings.Split(ansiSequence.ReplaceAllString(m.View().Content, ""), "\n")
 	for i, line := range viewLines {
-		if !strings.Contains(line, "▌ For THIS task") {
+		if !strings.Contains(line, "● For THIS task") {
 			continue
 		}
-		if i+2 >= len(viewLines) || !strings.Contains(viewLines[i+1], "▌ implementation worker") ||
-			!strings.Contains(viewLines[i+2], "▌ codex · 03 Aug · 10 turns") {
-			t.Fatalf("expected composed pane to wrap the selected title above stable metadata:\n%s", strings.Join(viewLines, "\n"))
+		if i+1 >= len(viewLines) || !strings.Contains(viewLines[i+1], "codex") ||
+			!strings.Contains(viewLines[i+1], "10 turns") || !strings.Contains(viewLines[i+1], "03 Aug") {
+			t.Fatalf("expected compact title above stable aligned metadata:\n%s", strings.Join(viewLines, "\n"))
 		}
 		return
 	}
@@ -629,7 +655,7 @@ func TestPreviewOmitsDuplicateLatestUserMessage(t *testing.T) {
 	}, 100, 24)
 
 	preview := ansiSequence.ReplaceAllString(m.preview.GetContent(), "")
-	if strings.Contains(preview, "LATEST USER MESSAGE") {
+	if strings.Contains(preview, "You asked next") {
 		t.Fatalf("expected duplicate latest-user section to be omitted:\n%s", preview)
 	}
 	if strings.Count(preview, request) != 1 {
@@ -677,11 +703,11 @@ func TestTooSmallLayoutIsIntentionalAndExact(t *testing.T) {
 	}
 }
 
-func TestEditorialLayoutUsesSurfacesInsteadOfBoxedPanes(t *testing.T) {
+func TestWideJournalLayoutUsesLayeredSurfacesWithoutDivider(t *testing.T) {
 	m := sizedModel(contextPayload{
 		Project:       "/work/convo-explorer",
-		Conversations: []conversation{{UUID: "one", Source: "codex", FirstMessage: "First"}},
-	}, 136, 65)
+		Conversations: []conversation{{UUID: "one", Source: "codex", FirstMessage: "First", LastAgentMessage: "Finished the field note."}},
+	}, 150, 40)
 
 	plain := ansiSequence.ReplaceAllString(m.View().Content, "")
 	for _, border := range []string{"╭", "╮", "╰", "╯"} {
@@ -689,14 +715,19 @@ func TestEditorialLayoutUsesSurfacesInsteadOfBoxedPanes(t *testing.T) {
 			t.Fatalf("expected editorial surfaces rather than rounded pane boxes %q:\n%s", border, plain)
 		}
 	}
-	if !strings.Contains(plain, "Recent") || !strings.Contains(plain, "Conversation") {
+	if !strings.Contains(plain, "RECENT NOTES") || !strings.Contains(plain, "Latest outcome") {
 		t.Fatalf("expected both workspace regions:\n%s", plain)
 	}
-	if got := lipgloss.Width(m.View().Content); got != 136 {
-		t.Fatalf("expected 136-column canvas, got %d", got)
+	for _, rejected := range []string{"Conversation detail", "│"} {
+		if strings.Contains(plain, rejected) {
+			t.Fatalf("expected authored whitespace instead of rejected divider %q:\n%s", rejected, plain)
+		}
 	}
-	if got := lipgloss.Height(m.View().Content); got != 65 {
-		t.Fatalf("expected 65-row canvas, got %d", got)
+	if got := lipgloss.Width(m.View().Content); got != 150 {
+		t.Fatalf("expected 150-column canvas, got %d", got)
+	}
+	if got := lipgloss.Height(m.View().Content); got != 40 {
+		t.Fatalf("expected 40-row canvas, got %d", got)
 	}
 }
 
@@ -815,5 +846,179 @@ func TestMissingMetadataIsOmittedCleanly(t *testing.T) {
 		if strings.Contains(plain, missing) {
 			t.Fatalf("expected missing metadata %q to be omitted:\n%s", missing, plain)
 		}
+	}
+}
+
+func TestReadingHeroUsesBackendSummaryWhenPresent(t *testing.T) {
+	m := sizedModel(contextPayload{
+		Project: "/work/convo-explorer",
+		Conversations: []conversation{{
+			UUID:             "one",
+			Slug:             "journal-shell",
+			Source:           "codex",
+			Summary:          "Shipped the verified conversation journal shell.",
+			FirstMessage:     "Redesign the interface.",
+			LastAgentMessage: "The implementation details remain available below.",
+		}},
+	}, 109, 33)
+
+	preview := ansiSequence.ReplaceAllString(m.preview.GetContent(), "")
+	if !strings.Contains(preview, "Latest outcome") || !strings.Contains(preview, "Shipped the verified conversation journal shell.") {
+		t.Fatalf("expected the backend-provided summary to anchor the outcome hero:\n%s", preview)
+	}
+	if strings.Index(preview, "Shipped the verified conversation journal shell.") > strings.Index(preview, "Agent answered") {
+		t.Fatalf("expected latest outcome before the complete reply timeline:\n%s", preview)
+	}
+}
+
+func TestReadingHeroUsesExactLatestAgentParagraphWithoutSummary(t *testing.T) {
+	m := sizedModel(contextPayload{
+		Project: "/work/convo-explorer",
+		Conversations: []conversation{{
+			UUID:             "one",
+			Source:           "codex",
+			FirstMessage:     "Make the journal useful.",
+			LastAgentMessage: "Created the field-notes reading shell.\n\nVerified every interaction and the actual reply tail.",
+		}},
+	}, 109, 33)
+
+	preview := ansiSequence.ReplaceAllString(m.preview.GetContent(), "")
+	if !strings.Contains(preview, "Latest outcome") || strings.Count(preview, "Created the field-notes reading shell.") != 2 {
+		t.Fatalf("expected the exact first agent paragraph in both outcome and full reply:\n%s", preview)
+	}
+	if strings.Contains(preview, "Conversation summary") {
+		t.Fatalf("expected no fabricated summary label when backend summary is absent:\n%s", preview)
+	}
+}
+
+func TestReadingTimelineUsesHumanAndAgentSpeakerLanguage(t *testing.T) {
+	m := sizedModel(contextPayload{
+		Project: "/work/convo-explorer",
+		Conversations: []conversation{{
+			UUID:             "one",
+			Source:           "codex",
+			FirstMessage:     "Open with a journal concept.",
+			LastUserMessage:  "Make the latest outcome dominant.",
+			LastAgentMessage: "Done with complete Markdown.",
+		}},
+	}, 109, 33)
+
+	preview := ansiSequence.ReplaceAllString(m.preview.GetContent(), "")
+	for _, wanted := range []string{"You asked", "You asked next", "Agent answered"} {
+		if !strings.Contains(preview, wanted) {
+			t.Fatalf("expected editorial speaker landmark %q:\n%s", wanted, preview)
+		}
+	}
+	if !(strings.Index(preview, "You asked") < strings.Index(preview, "You asked next") &&
+		strings.Index(preview, "You asked next") < strings.Index(preview, "Agent answered")) {
+		t.Fatalf("expected chronological speaker sequence:\n%s", preview)
+	}
+}
+
+func TestFocusedAndInactiveSelectionKeepFullWidthShape(t *testing.T) {
+	m := sizedModel(contextPayload{
+		Project: "/work/convo-explorer",
+		Conversations: []conversation{{
+			UUID:         "one",
+			Source:       "codex",
+			Timestamp:    "2026-08-04T10:00:00Z",
+			TurnCount:    8,
+			FirstMessage: "Compose the field-notes workspace",
+		}},
+	}, 109, 33)
+
+	render := func(focused bool) string {
+		var output strings.Builder
+		conversationDelegate{colors: m.colors, focused: focused}.Render(&output, m.conversations, 0, m.conversations.SelectedItem())
+		return output.String()
+	}
+	focused := render(true)
+	inactive := render(false)
+	if focused == inactive {
+		t.Fatal("expected focused and inactive selection treatments to remain distinct")
+	}
+	for name, output := range map[string]string{"focused": focused, "inactive": inactive} {
+		if lipgloss.Width(strings.Split(output, "\n")[0]) < m.conversations.Width()-1 {
+			t.Fatalf("expected %s selected shape to fill the feed width:\n%s", name, output)
+		}
+		plain := ansiSequence.ReplaceAllString(output, "")
+		if !strings.Contains(plain, "Compose the field-notes workspace") || !strings.Contains(plain, "04 Aug") {
+			t.Fatalf("expected %s selection to retain title and aligned metadata:\n%s", name, plain)
+		}
+	}
+}
+
+func TestAppliedSearchCollapsesToCompactMastheadStatus(t *testing.T) {
+	m := sizedModel(contextPayload{
+		Project: "/work/convo-explorer",
+		Conversations: []conversation{
+			{UUID: "one", Source: "codex", FirstMessage: "Journal session"},
+			{UUID: "two", Source: "claude", FirstMessage: "Other session"},
+		},
+	}, 109, 33)
+	m = press(m, '/', "/")
+	m.conversations.SetFilterText("journal")
+	m = press(m, tea.KeyEnter, "")
+
+	plain := ansiSequence.ReplaceAllString(m.View().Content, "")
+	if strings.Contains(plain, "SEARCH FIELD NOTES") || strings.Contains(plain, "Filter conversations") {
+		t.Fatalf("expected accepted search to collapse its input strip:\n%s", plain)
+	}
+	for _, wanted := range []string{"FILTER", "journal", "1 result"} {
+		if !strings.Contains(strings.ToLower(plain), strings.ToLower(wanted)) {
+			t.Fatalf("expected compact applied-filter status %q:\n%s", wanted, plain)
+		}
+	}
+}
+
+func TestCompactBrowseUsesAvailableSpaceForSelectedOutcome(t *testing.T) {
+	m := sizedModel(contextPayload{
+		Project: "/work/convo-explorer",
+		Conversations: []conversation{
+			{
+				UUID:             "one",
+				Source:           "codex",
+				FirstMessage:     "Compose a deliberate compact journal",
+				LastAgentMessage: "Shipped the selected note with a calm reading mode.\n\nAll details remain below.",
+			},
+			{UUID: "two", Source: "claude", FirstMessage: "Another note", LastAgentMessage: "Done."},
+		},
+	}, 90, 30)
+
+	plain := ansiSequence.ReplaceAllString(m.View().Content, "")
+	for _, wanted := range []string{"ON THIS NOTE", "Shipped the selected note with a calm reading mode."} {
+		if !strings.Contains(plain, wanted) {
+			t.Fatalf("expected compact feed to use genuine vacant space for %q:\n%s", wanted, plain)
+		}
+	}
+}
+
+func TestBrowseFooterDoesNotRepeatMastheadPositionOrScroll(t *testing.T) {
+	m := sizedModel(contextPayload{
+		Project:       "/work/convo-explorer",
+		Conversations: []conversation{{UUID: "one", Source: "codex", FirstMessage: "A note", LastAgentMessage: "Done."}},
+	}, 109, 33)
+
+	footer := ansiSequence.ReplaceAllString(m.footer(), "")
+	if !strings.Contains(footer, "BROWSE") {
+		t.Fatalf("expected contextual browse state:\n%s", footer)
+	}
+	for _, duplicate := range []string{"1 / 1", "ALL", "TOP"} {
+		if strings.Contains(footer, duplicate) {
+			t.Fatalf("expected authored footer to omit masthead/detail duplicate %q:\n%s", duplicate, footer)
+		}
+	}
+}
+
+func TestCompactReadingFooterKeepsQuitFallbackVisible(t *testing.T) {
+	m := sizedModel(contextPayload{
+		Project:       "/work/convo-explorer",
+		Conversations: []conversation{{UUID: "one", Source: "codex", FirstMessage: "A note", LastAgentMessage: strings.Repeat("line\n", 30)}},
+	}, 90, 30)
+	m = press(m, tea.KeyTab, "")
+
+	footer := ansiSequence.ReplaceAllString(m.footer(), "")
+	if !strings.Contains(footer, "ctrl+c quit") || strings.Contains(footer, "…") {
+		t.Fatalf("expected compact reading help to keep the exit fallback visible:\n%s", footer)
 	}
 }
