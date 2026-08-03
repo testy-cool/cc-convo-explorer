@@ -16,6 +16,8 @@ import (
 	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/glamour/v2"
+	"charm.land/glamour/v2/styles"
 	"charm.land/lipgloss/v2"
 )
 
@@ -108,6 +110,8 @@ func (d conversationDelegate) Render(w io.Writer, m list.Model, index int, raw l
 }
 
 var whitespace = regexp.MustCompile(`\s+`)
+var markdownDecoration = regexp.MustCompile("[*_`~]")
+var markdownLink = regexp.MustCompile(`\[([^]]+)]\([^)]+\)`)
 
 type palette struct {
 	canvas    color.Color
@@ -230,6 +234,7 @@ type model struct {
 	keys          keyMap
 	colors        palette
 	focus         paneFocus
+	isDark        bool
 	width         int
 	height        int
 }
@@ -359,6 +364,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) applyTheme(isDark bool) {
+	m.isDark = isDark
 	m.colors = newPalette(isDark)
 	m.applyThemeFromPalette()
 }
@@ -441,7 +447,7 @@ func (m *model) refreshPreview() {
 		return
 	}
 
-	title := compact(c.FirstMessage, max(8, m.preview.Width()))
+	title := editorialTitle(c, max(8, m.preview.Width()))
 	identity := strings.Join(nonEmpty(strings.ToLower(c.Source), shortID(c.UUID)), " · ")
 	metadata := strings.Join(nonEmpty(date(c.Timestamp), turnLabel(c.TurnCount)), " · ")
 	technical := strings.Join(nonEmpty(c.Model, c.Effort), " · ")
@@ -450,9 +456,9 @@ func (m *model) refreshPreview() {
 		lipgloss.NewStyle().Bold(true).Foreground(m.colors.text).Render(title),
 		lipgloss.NewStyle().Foreground(m.colors.muted).Render(strings.Join(nonEmpty(identity, metadata), "  ")),
 		lipgloss.NewStyle().Foreground(m.colors.secondary).Render(technical),
-		plainSection(m.colors, "First message", c.FirstMessage),
-		plainSection(m.colors, "Your latest message", c.LastUserMessage),
-		plainSection(m.colors, "Agent's latest reply", c.LastAgentMessage),
+		m.markdownSection("First message", c.FirstMessage),
+		m.markdownSection("Your latest message", c.LastUserMessage),
+		m.markdownSection("Agent's latest reply", c.LastAgentMessage),
 	)
 	m.preview.SetContent(strings.Join(parts, "\n\n"))
 	m.preview.GotoTop()
@@ -611,13 +617,95 @@ func placeSides(width int, left, right string) string {
 	return left + strings.Repeat(" ", gap) + right
 }
 
-func plainSection(colors palette, label, text string) string {
+func (m model) markdownSection(label, text string) string {
 	if strings.TrimSpace(text) == "" {
 		return ""
 	}
-	heading := lipgloss.NewStyle().Bold(true).Foreground(colors.muted).Render(label)
-	content := lipgloss.NewStyle().Foreground(colors.text).Render(strings.TrimSpace(text))
+	heading := lipgloss.NewStyle().Bold(true).Foreground(m.colors.muted).Render(label)
+	content := m.renderMarkdown(text)
 	return heading + "\n" + content
+}
+
+func (m model) renderMarkdown(markdown string) string {
+	style := styles.DarkStyleConfig
+	if !m.isDark {
+		style = styles.LightStyleConfig
+	}
+
+	zero := uint(0)
+	text := terminalColor(m.colors.text)
+	muted := terminalColor(m.colors.muted)
+	primary := terminalColor(m.colors.primary)
+	secondary := terminalColor(m.colors.secondary)
+	surface := terminalColor(m.colors.surface)
+	style.Document.Margin = &zero
+	style.Document.Color = &text
+	style.Paragraph.Color = &text
+	style.Text.Color = &text
+	style.Heading.Color = &primary
+	style.H1.Color = &primary
+	style.H2.Color = &primary
+	style.H3.Color = &primary
+	style.H4.Color = &primary
+	style.H5.Color = &primary
+	style.H6.Color = &primary
+	style.H1.BlockPrefix = ""
+	style.H1.Prefix = ""
+	style.H2.BlockPrefix = ""
+	style.H2.Prefix = ""
+	style.H3.BlockPrefix = ""
+	style.H3.Prefix = ""
+	style.H4.BlockPrefix = ""
+	style.H4.Prefix = ""
+	style.H5.BlockPrefix = ""
+	style.H5.Prefix = ""
+	style.H6.BlockPrefix = ""
+	style.H6.Prefix = ""
+	style.Strong.Color = &secondary
+	style.Emph.Color = &secondary
+	style.Link.Color = &primary
+	style.LinkText.Color = &primary
+	style.Code.Color = &secondary
+	style.Code.BackgroundColor = &surface
+	style.BlockQuote.Color = &muted
+	style.Item.Color = &text
+	style.Enumeration.Color = &primary
+
+	renderer, err := glamour.NewTermRenderer(
+		glamour.WithStyles(style),
+		glamour.WithWordWrap(max(12, m.preview.Width()-2)),
+		glamour.WithPreservedNewLines(),
+	)
+	if err != nil {
+		return lipgloss.NewStyle().Foreground(m.colors.text).Render(strings.TrimSpace(markdown))
+	}
+	rendered, err := renderer.Render(markdown)
+	if err != nil {
+		return lipgloss.NewStyle().Foreground(m.colors.text).Render(strings.TrimSpace(markdown))
+	}
+	return strings.Trim(rendered, "\n")
+}
+
+func terminalColor(value color.Color) string {
+	r, g, b, _ := value.RGBA()
+	return fmt.Sprintf("#%02X%02X%02X", uint8(r>>8), uint8(g>>8), uint8(b>>8))
+}
+
+func editorialTitle(c conversation, width int) string {
+	if strings.TrimSpace(c.Slug) != "" {
+		return compact(c.Slug, width)
+	}
+	for _, line := range strings.Split(c.FirstMessage, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		line = strings.TrimSpace(strings.TrimLeft(line, "#"))
+		line = markdownLink.ReplaceAllString(line, "$1")
+		line = markdownDecoration.ReplaceAllString(line, "")
+		return compact(line, width)
+	}
+	return "(no recorded prompt)"
 }
 
 func shortDate(timestamp string) string {

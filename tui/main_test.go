@@ -128,8 +128,58 @@ func TestPreviewSoftWrapsWithoutDroppingReply(t *testing.T) {
 	if !m.preview.SoftWrap {
 		t.Fatal("expected the preview viewport to soft-wrap long replies")
 	}
-	if !strings.Contains(ansiSequence.ReplaceAllString(m.preview.GetContent(), ""), reply) {
+	preview := whitespace.ReplaceAllString(ansiSequence.ReplaceAllString(m.preview.GetContent(), ""), " ")
+	if !strings.Contains(preview, reply) {
 		t.Fatalf("expected complete reply in viewport content:\n%s", m.preview.GetContent())
+	}
+}
+
+func TestPreviewRendersConversationMessagesAsMarkdown(t *testing.T) {
+	m := sizedModel(contextPayload{
+		Project: "/work/convo-explorer",
+		Conversations: []conversation{{
+			UUID:             "one",
+			Source:           "codex",
+			FirstMessage:     "# Release notes\n\nShip the **reader**.",
+			LastUserMessage:  "Please keep the [docs link](https://example.com/docs).",
+			LastAgentMessage: "## Complete\n\n- Preserved *every* line\n\n```go\nfmt.Println(\"tail\")\n```",
+		}},
+	}, 110, 32)
+
+	preview := ansiSequence.ReplaceAllString(m.preview.GetContent(), "")
+	for _, wanted := range []string{"Release notes", "reader", "docs link", "Complete", "Preserved", "fmt.Println", "tail"} {
+		if !strings.Contains(preview, wanted) {
+			t.Fatalf("expected rendered Markdown content %q:\n%s", wanted, preview)
+		}
+	}
+	for _, literal := range []string{"# Release notes", "**reader**", "](", "## Complete", "```go", "*every*"} {
+		if strings.Contains(preview, literal) {
+			t.Fatalf("expected Markdown syntax %q to be rendered, not shown literally:\n%s", literal, preview)
+		}
+	}
+	if !strings.Contains(m.preview.GetContent(), "\x1b[") {
+		t.Fatalf("expected Glamour styling in rendered message bodies:\n%s", m.preview.GetContent())
+	}
+}
+
+func TestPreviewOmitsLatestUserSectionWhenBackendOmitsMessage(t *testing.T) {
+	m := sizedModel(contextPayload{
+		Project: "/work/convo-explorer",
+		Conversations: []conversation{{
+			UUID:             "one",
+			Source:           "codex",
+			FirstMessage:     "Only request",
+			LastUserMessage:  "",
+			LastAgentMessage: "Only reply",
+		}},
+	}, 100, 24)
+
+	preview := ansiSequence.ReplaceAllString(m.preview.GetContent(), "")
+	if strings.Contains(preview, "Your latest message") {
+		t.Fatalf("expected omitted backend field not to create a duplicate latest-user section:\n%s", preview)
+	}
+	if strings.Count(preview, "Only request") != 2 {
+		t.Fatalf("expected one title and one first-message body, not a duplicated latest user message:\n%s", preview)
 	}
 }
 
