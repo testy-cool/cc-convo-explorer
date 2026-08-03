@@ -97,11 +97,13 @@ func (d conversationDelegate) Render(w io.Writer, m list.Model, index int, raw l
 		Width(rowWidth).
 		Foreground(d.colors.muted)
 	if selected {
-		titleStyle = titleStyle.Bold(true).Background(d.colors.surface)
-		metaStyle = metaStyle.Background(d.colors.surface)
+		selection := d.colors.selectionInactive
 		if d.focused {
-			titleStyle = titleStyle.Foreground(d.colors.primary)
+			selection = d.colors.selection
+			titleStyle = titleStyle.Foreground(d.colors.accent)
 		}
+		titleStyle = titleStyle.Bold(true).Background(selection)
+		metaStyle = metaStyle.Background(selection)
 	}
 
 	title := marker + compact(item.Title(), textWidth)
@@ -114,31 +116,40 @@ var markdownDecoration = regexp.MustCompile("[*_`~]")
 var markdownLink = regexp.MustCompile(`\[([^]]+)]\([^)]+\)`)
 
 type palette struct {
-	canvas    color.Color
-	panel     color.Color
-	surface   color.Color
-	text      color.Color
-	muted     color.Color
-	border    color.Color
-	primary   color.Color
-	secondary color.Color
-	onPrimary color.Color
+	canvas            color.Color
+	panel             color.Color
+	raised            color.Color
+	text              color.Color
+	muted             color.Color
+	separator         color.Color
+	accent            color.Color
+	selection         color.Color
+	selectionInactive color.Color
+	match             color.Color
+	status            color.Color
 }
 
 func newPalette(isDark bool) palette {
 	lightDark := lipgloss.LightDark(isDark)
 	return palette{
-		canvas:    lightDark(lipgloss.Color("#FBF8FC"), lipgloss.Color("#18171F")),
-		panel:     lightDark(lipgloss.Color("#F4EFF6"), lipgloss.Color("#201E29")),
-		surface:   lightDark(lipgloss.Color("#EAE2EE"), lipgloss.Color("#302B3A")),
-		text:      lightDark(lipgloss.Color("#27222D"), lipgloss.Color("#F4F0F5")),
-		muted:     lightDark(lipgloss.Color("#716978"), lipgloss.Color("#AAA1AE")),
-		border:    lightDark(lipgloss.Color("#D7CCDC"), lipgloss.Color("#463F50")),
-		primary:   lightDark(lipgloss.Color("#7557B7"), lipgloss.Color("#C6A0F6")),
-		secondary: lightDark(lipgloss.Color("#B5356E"), lipgloss.Color("#F5A9CB")),
-		onPrimary: lightDark(lipgloss.Color("#FFF9FF"), lipgloss.Color("#211A29")),
+		canvas:            lightDark(lipgloss.Color("#FBF8F6"), lipgloss.Color("#19171B")),
+		panel:             lightDark(lipgloss.Color("#F4EEEC"), lipgloss.Color("#211E23")),
+		raised:            lightDark(lipgloss.Color("#ECE4E4"), lipgloss.Color("#2A252C")),
+		text:              lightDark(lipgloss.Color("#2B252A"), lipgloss.Color("#F3ECEF")),
+		muted:             lightDark(lipgloss.Color("#746A70"), lipgloss.Color("#A99EA5")),
+		separator:         lightDark(lipgloss.Color("#D9CDCF"), lipgloss.Color("#4B4149")),
+		accent:            lightDark(lipgloss.Color("#76529B"), lipgloss.Color("#D1A8E8")),
+		selection:         lightDark(lipgloss.Color("#E5D8EA"), lipgloss.Color("#3A2E40")),
+		selectionInactive: lightDark(lipgloss.Color("#ECE6E8"), lipgloss.Color("#302B31")),
+		match:             lightDark(lipgloss.Color("#9A641F"), lipgloss.Color("#E7B76B")),
+		status:            lightDark(lipgloss.Color("#4F765D"), lipgloss.Color("#9BC5A5")),
 	}
 }
+
+const (
+	minimumWidth  = 72
+	minimumHeight = 18
+)
 
 type paneFocus int
 
@@ -164,11 +175,11 @@ func defaultKeyMap() keyMap {
 	return keyMap{
 		Move: key.NewBinding(
 			key.WithKeys("up", "down", "j", "k"),
-			key.WithHelp("j/k", "move"),
+			key.WithHelp("↑/↓ j/k", "move"),
 		),
 		Scroll: key.NewBinding(
 			key.WithKeys("up", "down", "j", "k"),
-			key.WithHelp("j/k", "scroll"),
+			key.WithHelp("↑/↓ j/k", "scroll"),
 		),
 		Page: key.NewBinding(
 			key.WithKeys("pgup", "pgdown"),
@@ -179,11 +190,11 @@ func defaultKeyMap() keyMap {
 			key.WithHelp("g/G", "ends"),
 		),
 		SwitchPane: key.NewBinding(
-			key.WithKeys("tab"),
+			key.WithKeys("tab", "shift+tab"),
 			key.WithHelp("tab", "read"),
 		),
 		BrowsePane: key.NewBinding(
-			key.WithKeys("tab"),
+			key.WithKeys("tab", "shift+tab"),
 			key.WithHelp("tab", "browse"),
 		),
 		Search: key.NewBinding(
@@ -199,8 +210,8 @@ func defaultKeyMap() keyMap {
 			key.WithHelp("esc", "clear"),
 		),
 		Quit: key.NewBinding(
-			key.WithKeys("q", "ctrl+c"),
-			key.WithHelp("q", "quit"),
+			key.WithKeys("ctrl+c"),
+			key.WithHelp("ctrl+c", "quit"),
 		),
 	}
 }
@@ -237,6 +248,7 @@ type model struct {
 	isDark        bool
 	width         int
 	height        int
+	filterAnchor  string
 }
 
 func loadContext() (contextPayload, error) {
@@ -275,6 +287,7 @@ func initialModel(payload contextPayload) model {
 	conversationList.DisableQuitKeybindings()
 	conversationList.FilterInput.Prompt = "/ "
 	conversationList.FilterInput.Placeholder = "Filter conversations"
+	conversationList.FilterInput.SetVirtualCursor(false)
 
 	preview := viewport.New()
 	preview.SoftWrap = true
@@ -297,8 +310,10 @@ func (m model) Init() tea.Cmd { return tea.RequestBackgroundColor }
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.BackgroundColorMsg:
+		atBottom, scrollPercent, preserve := m.previewPosition()
 		m.applyTheme(msg.IsDark())
 		m.refreshPreview()
+		m.restorePreviewPosition(atBottom, scrollPercent, preserve)
 		return m, nil
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -306,10 +321,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resize()
 		return m, nil
 	case tea.KeyPressMsg:
+		if key.Matches(msg, m.keys.Quit) {
+			return m, tea.Quit
+		}
 		if m.conversations.SettingFilter() {
 			before := m.selectedID()
 			var cmd tea.Cmd
 			m.conversations, cmd = m.conversations.Update(msg)
+			if msg.String() == "esc" {
+				m.restoreFilterSelection()
+				m.filterAnchor = ""
+			}
 			if m.selectedID() != before || msg.String() == "esc" {
 				m.refreshPreview()
 			}
@@ -317,11 +339,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.String() == "esc" && m.conversations.FilterValue() != "" {
 			m.conversations.ResetFilter()
+			m.restoreFilterSelection()
+			m.filterAnchor = ""
 			m.refreshPreview()
 			return m, nil
-		}
-		if key.Matches(msg, m.keys.Quit) {
-			return m, tea.Quit
 		}
 		if key.Matches(msg, m.keys.SwitchPane) {
 			if m.focus == browseFocus {
@@ -333,6 +354,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if key.Matches(msg, m.keys.Search) {
+			if m.filterAnchor == "" {
+				m.filterAnchor = m.selectedID()
+			}
 			m.focus = browseFocus
 			m.applyThemeFromPalette()
 			var cmd tea.Cmd
@@ -355,8 +379,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	previous := m.selectedID()
+	_, filterResultsUpdated := msg.(list.FilterMatchesMsg)
 	var cmd tea.Cmd
 	m.conversations, cmd = m.conversations.Update(msg)
+	if filterResultsUpdated {
+		m.restoreFilterSelection()
+	}
 	if m.selectedID() != previous {
 		m.refreshPreview()
 	}
@@ -374,9 +402,13 @@ func (m *model) applyThemeFromPalette() {
 		colors:  m.colors,
 		focused: m.focus == browseFocus,
 	})
+	m.conversations.Styles.DefaultFilterCharacterMatch = lipgloss.NewStyle().
+		Foreground(m.colors.match).
+		Underline(true)
 
 	inputStyles := m.conversations.FilterInput.Styles()
-	inputStyles.Focused.Prompt = inputStyles.Focused.Prompt.Foreground(m.colors.secondary).Bold(true)
+	inputStyles.Cursor.Color = m.colors.accent
+	inputStyles.Focused.Prompt = inputStyles.Focused.Prompt.Foreground(m.colors.match).Bold(true)
 	inputStyles.Focused.Text = inputStyles.Focused.Text.Foreground(m.colors.text)
 	inputStyles.Focused.Placeholder = inputStyles.Focused.Placeholder.Foreground(m.colors.muted)
 	inputStyles.Focused.Suggestion = inputStyles.Focused.Suggestion.Foreground(m.colors.muted)
@@ -385,39 +417,43 @@ func (m *model) applyThemeFromPalette() {
 	inputStyles.Blurred.Placeholder = inputStyles.Blurred.Placeholder.Foreground(m.colors.muted)
 	m.conversations.FilterInput.SetStyles(inputStyles)
 
-	m.help.Styles.ShortKey = lipgloss.NewStyle().Foreground(m.colors.primary).Bold(true)
+	m.help.Styles.ShortKey = lipgloss.NewStyle().Foreground(m.colors.accent).Bold(true)
 	m.help.Styles.ShortDesc = lipgloss.NewStyle().Foreground(m.colors.muted)
-	m.help.Styles.ShortSeparator = lipgloss.NewStyle().Foreground(m.colors.border)
+	m.help.Styles.ShortSeparator = lipgloss.NewStyle().Foreground(m.colors.separator)
 }
 
 func (m *model) resize() {
+	atBottom, scrollPercent, preserve := m.previewPosition()
 	layout := m.layout()
-	listHeight := max(1, layout.paneContent-3)
-	previewHeight := max(1, layout.paneContent-2)
+	listHeight := max(1, layout.paneContent-2)
+	previewHeight := max(1, layout.paneContent-1)
 	m.conversations.SetSize(layout.leftContent, listHeight)
-	m.conversations.FilterInput.SetWidth(max(4, layout.leftContent-6))
+	m.conversations.FilterInput.SetWidth(max(4, layout.leftContent-4))
 	m.preview.SetWidth(layout.rightContent)
 	m.preview.SetHeight(previewHeight)
-	m.help.SetWidth(max(1, m.width-24))
+	m.help.SetWidth(max(1, m.width-30))
 	m.refreshPreview()
+	m.restorePreviewPosition(atBottom, scrollPercent, preserve)
 }
 
 func (m model) layout() paneLayout {
 	gap := 1
-	leftOuter := max(30, min(48, m.width*36/100))
-	if m.width < 100 {
-		leftOuter = max(30, m.width*38/100)
+	leftOuter := 44
+	if m.width < 110 {
+		leftOuter = max(32, m.width*38/100)
+	} else if m.width > 150 {
+		leftOuter = min(48, m.width*32/100)
 	}
-	leftOuter = min(leftOuter, max(1, m.width-gap-24))
+	leftOuter = min(leftOuter, max(1, m.width-gap-36))
 	rightOuter := max(1, m.width-gap-leftOuter)
 	bodyHeight := max(6, m.height-2)
 	return paneLayout{
 		leftOuter:    leftOuter,
 		rightOuter:   rightOuter,
-		leftContent:  max(1, leftOuter-4),
-		rightContent: max(1, rightOuter-4),
+		leftContent:  leftOuter,
+		rightContent: rightOuter,
 		bodyHeight:   bodyHeight,
-		paneContent:  max(1, bodyHeight-2),
+		paneContent:  bodyHeight,
 	}
 }
 
@@ -434,15 +470,61 @@ func (m *model) selectedID() string {
 	if !ok {
 		return ""
 	}
+	return conversationID(c)
+}
+
+func conversationID(c conversation) string {
 	return strings.Join([]string{c.UUID, c.Source, c.Timestamp, c.FirstMessage}, "\x00")
+}
+
+func (m *model) restoreFilterSelection() {
+	if m.filterAnchor == "" {
+		return
+	}
+	for index, raw := range m.conversations.VisibleItems() {
+		item, ok := raw.(conversationItem)
+		if ok && conversationID(item.conversation) == m.filterAnchor {
+			m.conversations.Select(index)
+			return
+		}
+	}
+}
+
+func (m model) previewPosition() (atBottom bool, scrollPercent float64, preserve bool) {
+	preserve = m.preview.Width() > 0 && m.preview.Height() > 0 && m.preview.TotalLineCount() > 0
+	if !preserve {
+		return false, 0, false
+	}
+	return m.preview.AtBottom(), m.preview.ScrollPercent(), true
+}
+
+func (m *model) restorePreviewPosition(atBottom bool, scrollPercent float64, preserve bool) {
+	if !preserve {
+		return
+	}
+	if atBottom {
+		m.preview.GotoBottom()
+		return
+	}
+	maxOffset := max(0, m.preview.TotalLineCount()-m.preview.Height())
+	m.preview.SetYOffset(int(float64(maxOffset)*scrollPercent + 0.5))
+}
+
+func (m model) tooSmall() bool {
+	return m.width < minimumWidth || m.height < minimumHeight
 }
 
 func (m *model) refreshPreview() {
 	c, ok := m.selectedConversation()
 	if !ok {
+		query := strings.TrimSpace(m.conversations.FilterValue())
+		message := "No conversations are available."
+		if query != "" {
+			message = fmt.Sprintf("No conversations match %q.\n\nEsc clears the filter.", query)
+		}
 		m.preview.SetContent(lipgloss.NewStyle().
 			Foreground(m.colors.muted).
-			Render("No conversations match this filter."))
+			Render(message))
 		m.preview.GotoTop()
 		return
 	}
@@ -451,13 +533,17 @@ func (m *model) refreshPreview() {
 	identity := strings.Join(nonEmpty(strings.ToLower(c.Source), shortID(c.UUID)), " · ")
 	metadata := strings.Join(nonEmpty(date(c.Timestamp), turnLabel(c.TurnCount)), " · ")
 	technical := strings.Join(nonEmpty(c.Model, c.Effort), " · ")
+	latestUser := c.LastUserMessage
+	if strings.TrimSpace(latestUser) == strings.TrimSpace(c.FirstMessage) {
+		latestUser = ""
+	}
 
 	parts := nonEmpty(
 		lipgloss.NewStyle().Bold(true).Foreground(m.colors.text).Render(title),
 		lipgloss.NewStyle().Foreground(m.colors.muted).Render(strings.Join(nonEmpty(identity, metadata), "  ")),
-		lipgloss.NewStyle().Foreground(m.colors.secondary).Render(technical),
+		lipgloss.NewStyle().Foreground(m.colors.match).Render(technical),
 		m.markdownSection("First message", c.FirstMessage),
-		m.markdownSection("Your latest message", c.LastUserMessage),
+		m.markdownSection("Your latest message", latestUser),
 		m.markdownSection("Agent's latest reply", c.LastAgentMessage),
 	)
 	m.preview.SetContent(strings.Join(parts, "\n\n"))
@@ -470,29 +556,30 @@ func (m model) View() tea.View {
 		view.AltScreen = true
 		return view
 	}
+	if m.tooSmall() {
+		return m.tooSmallView()
+	}
 
 	layout := m.layout()
-	leftBorder := m.colors.border
-	rightBorder := m.colors.border
-	if m.focus == browseFocus {
-		leftBorder = m.colors.primary
-	} else {
-		rightBorder = m.colors.primary
-	}
-	paneStyle := func(width, height int, border color.Color) lipgloss.Style {
-		return lipgloss.NewStyle().
-			Width(width).
-			Height(height).
-			Padding(0, 1).
-			BorderStyle(lipgloss.RoundedBorder()).
-			BorderForeground(border).
-			Background(m.colors.panel)
-	}
-	left := paneStyle(layout.leftContent, layout.paneContent, leftBorder).
+	left := lipgloss.NewStyle().
+		Width(layout.leftOuter).
+		Height(layout.bodyHeight).
+		Background(m.colors.panel).
 		Render(m.listView(layout.leftContent))
-	rightContent := m.paneHeading("Conversation", m.focus == detailFocus) + "\n" + m.preview.View()
-	right := paneStyle(layout.rightContent, layout.paneContent, rightBorder).Render(rightContent)
-	body := lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
+	rightContent := m.paneHeading("Conversation", m.focus == detailFocus, layout.rightContent) + "\n" + m.preview.View()
+	right := lipgloss.NewStyle().
+		Width(layout.rightOuter).
+		Height(layout.bodyHeight).
+		Background(m.colors.canvas).
+		Render(rightContent)
+	separatorText := strings.TrimSuffix(strings.Repeat("│\n", layout.bodyHeight), "\n")
+	separator := lipgloss.NewStyle().
+		Width(1).
+		Height(layout.bodyHeight).
+		Foreground(m.colors.separator).
+		Background(m.colors.canvas).
+		Render(separatorText)
+	body := lipgloss.JoinHorizontal(lipgloss.Top, left, separator, right)
 	canvas := lipgloss.NewStyle().
 		Width(m.width).
 		Height(m.height).
@@ -504,22 +591,51 @@ func (m model) View() tea.View {
 	view.BackgroundColor = m.colors.canvas
 	view.ForegroundColor = m.colors.text
 	view.WindowTitle = "agentconvos · " + filepath.Base(m.data.Project)
+	if m.conversations.SettingFilter() {
+		if cursor := m.conversations.FilterInput.Cursor(); cursor != nil {
+			adjusted := *cursor
+			adjusted.X += 2
+			adjusted.Y += 2
+			view.Cursor = &adjusted
+		}
+	}
+	return view
+}
+
+func (m model) tooSmallView() tea.View {
+	title := lipgloss.NewStyle().Bold(true).Foreground(m.colors.accent).Render("AgentConvos")
+	dimensions := lipgloss.NewStyle().Foreground(m.colors.text).Render(
+		fmt.Sprintf("needs at least %dx%d · current %dx%d", minimumWidth, minimumHeight, m.width, m.height),
+	)
+	hint := lipgloss.NewStyle().Foreground(m.colors.muted).Render("Resize the terminal to browse conversations")
+	content := strings.Join([]string{title, "", dimensions, hint}, "\n")
+	canvas := lipgloss.NewStyle().
+		Width(m.width).
+		Height(m.height).
+		Align(lipgloss.Center).
+		AlignVertical(lipgloss.Center).
+		Background(m.colors.canvas).
+		Foreground(m.colors.text).
+		Render(content)
+	view := tea.NewView(canvas)
+	view.AltScreen = true
+	view.BackgroundColor = m.colors.canvas
+	view.ForegroundColor = m.colors.text
+	view.WindowTitle = "agentconvos · " + filepath.Base(m.data.Project)
 	return view
 }
 
 func (m model) header() string {
 	brand := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(m.colors.onPrimary).
-		Background(m.colors.primary).
-		Padding(0, 1).
+		Foreground(m.colors.accent).
 		Render("agentconvos")
 	project := lipgloss.NewStyle().Bold(true).Foreground(m.colors.text).Render(filepath.Base(m.data.Project))
-	left := brand + "  " + project
+	left := " " + brand + "  " + project
 	right := strings.Join([]string{
 		lipgloss.NewStyle().Foreground(m.colors.muted).Render(m.resultCount()),
 		m.position(),
-	}, "  ")
+	}, "  ") + " "
 	return lipgloss.NewStyle().
 		Width(m.width).
 		Background(m.colors.panel).
@@ -528,7 +644,7 @@ func (m model) header() string {
 
 func (m model) listView(width int) string {
 	return strings.Join([]string{
-		m.paneHeading("Recent", m.focus == browseFocus),
+		m.paneHeading("Recent", m.focus == browseFocus, width),
 		m.searchView(width),
 		m.conversations.View(),
 	}, "\n")
@@ -546,9 +662,9 @@ func (m model) footer() string {
 	}
 	keys := m.help.View(activeHelp{bindings: bindings})
 	right := strings.Join([]string{
-		lipgloss.NewStyle().Bold(true).Foreground(m.colors.primary).Render(focusLabel),
+		lipgloss.NewStyle().Bold(true).Foreground(m.colors.accent).Render(focusLabel),
 		m.position(),
-		lipgloss.NewStyle().Foreground(m.colors.secondary).Render(m.scrollState()),
+		lipgloss.NewStyle().Foreground(m.colors.status).Render(m.scrollState()),
 	}, "  ")
 	return lipgloss.NewStyle().
 		Width(m.width).
@@ -556,24 +672,30 @@ func (m model) footer() string {
 		Render(placeSides(m.width, " "+keys, right+" "))
 }
 
-func (m model) paneHeading(label string, focused bool) string {
-	style := lipgloss.NewStyle().Bold(true).Foreground(m.colors.muted)
-	marker := ""
+func (m model) paneHeading(label string, focused bool, width int) string {
+	style := lipgloss.NewStyle().
+		Width(max(1, width)).
+		MaxWidth(max(1, width)).
+		Background(m.colors.panel).
+		Foreground(m.colors.muted)
+	marker := "  "
 	if focused {
-		style = style.Foreground(m.colors.primary)
-		marker = " •"
+		style = style.Bold(true).Foreground(m.colors.accent).Background(m.colors.raised)
+		marker = "▌ "
 	}
-	return style.Render(label + marker)
+	return style.Render(marker + label)
 }
 
 func (m model) searchView(width int) string {
 	style := lipgloss.NewStyle().
 		Width(max(1, width)).
+		MaxWidth(max(1, width)).
+		Background(m.colors.panel).
 		Foreground(m.colors.muted)
 	if m.conversations.SettingFilter() || m.conversations.FilterValue() != "" {
-		style = style.Background(m.colors.surface)
+		style = style.Background(m.colors.raised)
 	}
-	return style.Render(" " + m.conversations.FilterInput.View())
+	return style.Render("  " + m.conversations.FilterInput.View())
 }
 
 func (m model) resultCount() string {
@@ -598,6 +720,9 @@ func (m model) position() string {
 }
 
 func (m model) scrollState() string {
+	if m.preview.AtTop() && m.preview.AtBottom() {
+		return "ALL"
+	}
 	if m.preview.AtTop() {
 		return "TOP"
 	}
@@ -635,20 +760,20 @@ func (m model) renderMarkdown(markdown string) string {
 	zero := uint(0)
 	text := terminalColor(m.colors.text)
 	muted := terminalColor(m.colors.muted)
-	primary := terminalColor(m.colors.primary)
-	secondary := terminalColor(m.colors.secondary)
-	surface := terminalColor(m.colors.surface)
+	accent := terminalColor(m.colors.accent)
+	match := terminalColor(m.colors.match)
+	raised := terminalColor(m.colors.raised)
 	style.Document.Margin = &zero
 	style.Document.Color = &text
 	style.Paragraph.Color = &text
 	style.Text.Color = &text
-	style.Heading.Color = &primary
-	style.H1.Color = &primary
-	style.H2.Color = &primary
-	style.H3.Color = &primary
-	style.H4.Color = &primary
-	style.H5.Color = &primary
-	style.H6.Color = &primary
+	style.Heading.Color = &accent
+	style.H1.Color = &accent
+	style.H2.Color = &accent
+	style.H3.Color = &accent
+	style.H4.Color = &accent
+	style.H5.Color = &accent
+	style.H6.Color = &accent
 	style.H1.BlockPrefix = ""
 	style.H1.Prefix = ""
 	style.H2.BlockPrefix = ""
@@ -661,19 +786,19 @@ func (m model) renderMarkdown(markdown string) string {
 	style.H5.Prefix = ""
 	style.H6.BlockPrefix = ""
 	style.H6.Prefix = ""
-	style.Strong.Color = &secondary
-	style.Emph.Color = &secondary
-	style.Link.Color = &primary
-	style.LinkText.Color = &primary
-	style.Code.Color = &secondary
-	style.Code.BackgroundColor = &surface
+	style.Strong.Color = &match
+	style.Emph.Color = &match
+	style.Link.Color = &accent
+	style.LinkText.Color = &accent
+	style.Code.Color = &match
+	style.Code.BackgroundColor = &raised
 	style.BlockQuote.Color = &muted
 	style.Item.Color = &text
-	style.Enumeration.Color = &primary
+	style.Enumeration.Color = &accent
 
 	renderer, err := glamour.NewTermRenderer(
 		glamour.WithStyles(style),
-		glamour.WithWordWrap(max(12, m.preview.Width()-2)),
+		glamour.WithWordWrap(max(12, m.preview.Width()-4)),
 		glamour.WithPreservedNewLines(),
 	)
 	if err != nil {
@@ -715,9 +840,13 @@ func shortDate(timestamp string) string {
 		"09": "Sep", "10": "Oct", "11": "Nov", "12": "Dec",
 	}
 	if len(timestamp) < 10 {
-		return "?"
+		return ""
 	}
-	return timestamp[8:10] + " " + months[timestamp[5:7]]
+	month, ok := months[timestamp[5:7]]
+	if !ok {
+		return ""
+	}
+	return timestamp[8:10] + " " + month
 }
 
 func compact(value string, width int) string {
@@ -747,6 +876,9 @@ func shortID(id string) string {
 }
 
 func turnLabel(turns int) string {
+	if turns <= 0 {
+		return ""
+	}
 	if turns == 1 {
 		return "1 turn"
 	}

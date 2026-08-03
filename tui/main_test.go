@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
@@ -14,6 +15,11 @@ var ansiSequence = regexp.MustCompile(`\x1b\[[0-9;:]*m`)
 func press(m model, code rune, text string) model {
 	updated, _ := m.Update(tea.KeyPressMsg{Code: code, Text: text})
 	return updated.(model)
+}
+
+func pressKey(m model, msg tea.KeyPressMsg) (model, tea.Cmd) {
+	updated, cmd := m.Update(msg)
+	return updated.(model), cmd
 }
 
 func sizedModel(payload contextPayload, width, height int) model {
@@ -195,13 +201,13 @@ func TestTabSwitchesToDetailSpecificHelp(t *testing.T) {
 	}, 110, 30)
 
 	browseHelp := ansiSequence.ReplaceAllString(m.footer(), "")
-	if !strings.Contains(browseHelp, "j/k move") || !strings.Contains(browseHelp, "/ filter") {
+	if !strings.Contains(browseHelp, "↑/↓ j/k move") || !strings.Contains(browseHelp, "/ filter") {
 		t.Fatalf("expected browse-specific key hints:\n%s", browseHelp)
 	}
 
 	m = press(m, tea.KeyTab, "")
 	detailHelp := ansiSequence.ReplaceAllString(m.footer(), "")
-	if !strings.Contains(detailHelp, "j/k scroll") || !strings.Contains(detailHelp, "pgup/dn page") {
+	if !strings.Contains(detailHelp, "↑/↓ j/k scroll") || !strings.Contains(detailHelp, "pgup/dn page") {
 		t.Fatalf("expected detail-specific key hints after Tab:\n%s", detailHelp)
 	}
 	if strings.Contains(detailHelp, "j/k move") {
@@ -349,5 +355,317 @@ func TestCompactLayoutKeepsBothPanesAndScrollStatusOnCanvas(t *testing.T) {
 	}
 	if got := lipgloss.Height(view); got != 30 {
 		t.Fatalf("expected 30-row canvas, got %d", got)
+	}
+	lines := strings.Split(ansiSequence.ReplaceAllString(view, ""), "\n")
+	lastVisibleLine := lines[min(29, len(lines)-1)]
+	if !strings.Contains(lastVisibleLine, "BROWSE") || !strings.Contains(lastVisibleLine, "TOP") {
+		t.Fatalf("expected focus help and scroll state on the last visible row, got:\n%s", lastVisibleLine)
+	}
+}
+
+func TestListDelegateNeverRendersMoreLinesThanItDeclares(t *testing.T) {
+	m := sizedModel(contextPayload{
+		Project: "/work/convo-explorer",
+		Conversations: []conversation{{
+			UUID:         "one",
+			Source:       "codex",
+			Timestamp:    "2026-08-03T20:00:00Z",
+			TurnCount:    10,
+			FirstMessage: "For THIS task you are the sole implementation worker, not an orchestrator.",
+		}},
+	}, 90, 30)
+
+	item := m.conversations.SelectedItem()
+	var rendered strings.Builder
+	delegate := conversationDelegate{colors: m.colors, focused: true}
+	delegate.Render(&rendered, m.conversations, 0, item)
+	if got, want := lipgloss.Height(rendered.String()), delegate.Height(); got != want {
+		t.Fatalf("expected delegate output to honor its two-line height, got %d:\n%s", got, rendered.String())
+	}
+	viewLines := strings.Split(ansiSequence.ReplaceAllString(m.View().Content, ""), "\n")
+	for i, line := range viewLines {
+		if !strings.Contains(line, "▌ For THIS task") {
+			continue
+		}
+		if i+1 >= len(viewLines) || !strings.Contains(viewLines[i+1], "▌ 03 Aug · codex · 10 turns") {
+			t.Fatalf("expected composed pane to keep selected title and metadata to two rows:\n%s", strings.Join(viewLines, "\n"))
+		}
+		return
+	}
+	t.Fatal("expected selected conversation in composed pane")
+}
+
+func TestShiftTabMovesFocusWithoutLosingSelection(t *testing.T) {
+	m := sizedModel(contextPayload{
+		Project: "/work/convo-explorer",
+		Conversations: []conversation{
+			{UUID: "one", Source: "codex", FirstMessage: "First"},
+			{UUID: "two", Source: "claude", FirstMessage: "Second"},
+		},
+	}, 110, 30)
+	m.conversations.Select(1)
+	m.refreshPreview()
+
+	m, _ = pressKey(m, tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
+	if m.focus != detailFocus {
+		t.Fatalf("expected Shift+Tab to move focus to detail, got %v", m.focus)
+	}
+	if m.conversations.Index() != 1 {
+		t.Fatalf("expected focus change to preserve selected row, got %d", m.conversations.Index())
+	}
+
+	m, _ = pressKey(m, tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
+	if m.focus != browseFocus {
+		t.Fatalf("expected second Shift+Tab to return to browse, got %v", m.focus)
+	}
+}
+
+func TestCtrlCIsGlobalExitWithoutStealingOrdinaryQ(t *testing.T) {
+	m := sizedModel(contextPayload{
+		Project:       "/work/convo-explorer",
+		Conversations: []conversation{{UUID: "one", Source: "codex", FirstMessage: "First"}},
+	}, 110, 30)
+
+	var cmd tea.Cmd
+	m, cmd = pressKey(m, tea.KeyPressMsg{Code: 'q', Text: "q"})
+	if cmd != nil {
+		t.Fatal("expected ordinary q not to quit while browsing")
+	}
+
+	m = press(m, '/', "/")
+	m, cmd = pressKey(m, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if cmd == nil {
+		t.Fatal("expected Ctrl+C to remain an exit fallback while filtering")
+	}
+}
+
+func TestClearingFilterRestoresThePreviousConversation(t *testing.T) {
+	m := sizedModel(contextPayload{
+		Project: "/work/convo-explorer",
+		Conversations: []conversation{
+			{UUID: "one", Source: "codex", FirstMessage: "First"},
+			{UUID: "two", Source: "claude", FirstMessage: "Keep selected"},
+			{UUID: "three", Source: "codex", FirstMessage: "Needle result"},
+		},
+	}, 110, 30)
+	m.conversations.Select(1)
+	m.refreshPreview()
+
+	m = press(m, '/', "/")
+	m.conversations.SetFilterText("needle")
+	m.refreshPreview()
+	if got := m.selectedID(); !strings.Contains(got, "three") {
+		t.Fatalf("expected filtered result to become selected, got %q", got)
+	}
+
+	m = press(m, tea.KeyEscape, "")
+	if got := m.selectedID(); !strings.Contains(got, "two") {
+		t.Fatalf("expected Escape to restore the pre-filter selection, got %q", got)
+	}
+	if !strings.Contains(ansiSequence.ReplaceAllString(m.preview.GetContent(), ""), "Keep selected") {
+		t.Fatalf("expected restored detail content:\n%s", m.preview.GetContent())
+	}
+}
+
+func TestPreviewOmitsDuplicateLatestUserMessage(t *testing.T) {
+	const request = "Keep the complete response"
+	m := sizedModel(contextPayload{
+		Project: "/work/convo-explorer",
+		Conversations: []conversation{{
+			UUID:             "one",
+			Source:           "codex",
+			FirstMessage:     request,
+			LastUserMessage:  request,
+			LastAgentMessage: "Complete reply",
+		}},
+	}, 100, 24)
+
+	preview := ansiSequence.ReplaceAllString(m.preview.GetContent(), "")
+	if strings.Contains(preview, "Your latest message") {
+		t.Fatalf("expected duplicate latest-user section to be omitted:\n%s", preview)
+	}
+	if strings.Count(preview, request) != 2 {
+		t.Fatalf("expected one title and one message body, got:\n%s", preview)
+	}
+}
+
+func TestFilterModeExposesAViewCursor(t *testing.T) {
+	m := sizedModel(contextPayload{
+		Project:       "/work/convo-explorer",
+		Conversations: []conversation{{UUID: "one", Source: "codex", FirstMessage: "First"}},
+	}, 110, 30)
+	if m.View().Cursor != nil {
+		t.Fatal("expected no terminal cursor while browsing")
+	}
+
+	m = press(m, '/', "/")
+	view := m.View()
+	if view.Cursor == nil {
+		t.Fatal("expected the focused Bubbles filter input to expose its cursor")
+	}
+	if view.Cursor.Y < 1 || view.Cursor.Y >= m.height-1 {
+		t.Fatalf("expected filter cursor on the application canvas, got y=%d", view.Cursor.Y)
+	}
+}
+
+func TestTooSmallLayoutIsIntentionalAndExact(t *testing.T) {
+	m := sizedModel(contextPayload{
+		Project:       "/work/convo-explorer",
+		Conversations: []conversation{{UUID: "one", Source: "codex", FirstMessage: "First"}},
+	}, 60, 12)
+
+	view := m.View().Content
+	plain := ansiSequence.ReplaceAllString(view, "")
+	for _, wanted := range []string{"AgentConvos", "needs at least 72x18", "60x12"} {
+		if !strings.Contains(plain, wanted) {
+			t.Fatalf("expected intentional too-small copy %q:\n%s", wanted, plain)
+		}
+	}
+	if got := lipgloss.Width(view); got != 60 {
+		t.Fatalf("expected 60-column too-small canvas, got %d", got)
+	}
+	if got := lipgloss.Height(view); got != 12 {
+		t.Fatalf("expected 12-row too-small canvas, got %d", got)
+	}
+}
+
+func TestEditorialLayoutUsesSurfacesInsteadOfBoxedPanes(t *testing.T) {
+	m := sizedModel(contextPayload{
+		Project:       "/work/convo-explorer",
+		Conversations: []conversation{{UUID: "one", Source: "codex", FirstMessage: "First"}},
+	}, 136, 65)
+
+	plain := ansiSequence.ReplaceAllString(m.View().Content, "")
+	for _, border := range []string{"╭", "╮", "╰", "╯"} {
+		if strings.Contains(plain, border) {
+			t.Fatalf("expected editorial surfaces rather than rounded pane boxes %q:\n%s", border, plain)
+		}
+	}
+	if !strings.Contains(plain, "Recent") || !strings.Contains(plain, "Conversation") {
+		t.Fatalf("expected both workspace regions:\n%s", plain)
+	}
+	if got := lipgloss.Width(m.View().Content); got != 136 {
+		t.Fatalf("expected 136-column canvas, got %d", got)
+	}
+	if got := lipgloss.Height(m.View().Content); got != 65 {
+		t.Fatalf("expected 65-row canvas, got %d", got)
+	}
+}
+
+func TestResizePreservesSelectionFocusQueryAndReadingPosition(t *testing.T) {
+	m := sizedModel(contextPayload{
+		Project: "/work/convo-explorer",
+		Conversations: []conversation{
+			{UUID: "one", Source: "codex", FirstMessage: "First"},
+			{
+				UUID:             "two",
+				Source:           "claude",
+				FirstMessage:     "Keep selected",
+				LastAgentMessage: strings.Repeat("complete line\n", 120) + "TAIL",
+			},
+		},
+	}, 90, 30)
+	m.conversations.Select(1)
+	m.refreshPreview()
+	m.focus = detailFocus
+	m.preview.GotoBottom()
+	m.conversations.SetFilterText("keep")
+	m.conversations.SetFilterState(list.FilterApplied)
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 136, Height: 65})
+	m = updated.(model)
+	if m.focus != detailFocus {
+		t.Fatalf("expected resize to preserve detail focus, got %v", m.focus)
+	}
+	if got := m.selectedID(); !strings.Contains(got, "two") {
+		t.Fatalf("expected resize to preserve selection, got %q", got)
+	}
+	if got := m.conversations.FilterValue(); got != "keep" {
+		t.Fatalf("expected resize to preserve query, got %q", got)
+	}
+	if !m.preview.AtBottom() {
+		t.Fatalf("expected resize to preserve bottom reading position, offset=%d", m.preview.YOffset())
+	}
+}
+
+func TestAppliedFilterStillAllowsListNavigation(t *testing.T) {
+	m := sizedModel(contextPayload{
+		Project: "/work/convo-explorer",
+		Conversations: []conversation{
+			{UUID: "one", Source: "codex", FirstMessage: "Session one"},
+			{UUID: "two", Source: "claude", FirstMessage: "Session two"},
+			{UUID: "three", Source: "codex", FirstMessage: "Session three"},
+		},
+	}, 110, 30)
+	m = press(m, '/', "/")
+	m.conversations.SetFilterText("session")
+	m.refreshPreview()
+
+	m = press(m, 'j', "j")
+	if got := m.selectedID(); !strings.Contains(got, "two") {
+		t.Fatalf("expected j to move within applied results instead of restoring the anchor, got %q", got)
+	}
+	if !strings.Contains(ansiSequence.ReplaceAllString(m.preview.GetContent(), ""), "Session two") {
+		t.Fatalf("expected filtered navigation to refresh detail:\n%s", m.preview.GetContent())
+	}
+}
+
+func TestScrollStateSaysAllWhenTheWholeDetailFits(t *testing.T) {
+	m := sizedModel(contextPayload{
+		Project: "/work/convo-explorer",
+		Conversations: []conversation{{
+			UUID:             "one",
+			Source:           "codex",
+			FirstMessage:     "Short request",
+			LastAgentMessage: "Short reply",
+		}},
+	}, 136, 65)
+
+	if !m.preview.AtTop() || !m.preview.AtBottom() {
+		t.Fatal("test requires the complete detail to fit in the viewport")
+	}
+	if got := m.scrollState(); got != "ALL" {
+		t.Fatalf("expected fully visible scroll state ALL, got %q", got)
+	}
+}
+
+func TestNoMatchStateNamesTheQueryAndRecovery(t *testing.T) {
+	m := sizedModel(contextPayload{
+		Project: "/work/convo-explorer",
+		Conversations: []conversation{
+			{UUID: "one", Source: "codex", FirstMessage: "First"},
+			{UUID: "two", Source: "claude", FirstMessage: "Second"},
+		},
+	}, 90, 30)
+	m.conversations.SetFilterText("absent")
+	m.refreshPreview()
+
+	plain := ansiSequence.ReplaceAllString(m.View().Content, "")
+	for _, wanted := range []string{`No conversations match "absent".`, "Esc clears the filter.", "0 results of 2"} {
+		if !strings.Contains(plain, wanted) {
+			t.Fatalf("expected actionable no-match state %q:\n%s", wanted, plain)
+		}
+	}
+}
+
+func TestMissingMetadataIsOmittedCleanly(t *testing.T) {
+	m := sizedModel(contextPayload{
+		Project: "/work/convo-explorer",
+		Conversations: []conversation{{
+			UUID:             "one",
+			Source:           "codex",
+			FirstMessage:     "Recorded request",
+			LastAgentMessage: "Recorded reply",
+		}},
+	}, 90, 30)
+
+	plain := ansiSequence.ReplaceAllString(m.View().Content, "")
+	if !strings.Contains(plain, "codex") {
+		t.Fatalf("expected available source metadata:\n%s", plain)
+	}
+	for _, missing := range []string{"0 turns", "? · codex"} {
+		if strings.Contains(plain, missing) {
+			t.Fatalf("expected missing metadata %q to be omitted:\n%s", missing, plain)
+		}
 	}
 }
