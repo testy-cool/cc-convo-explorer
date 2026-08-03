@@ -1366,6 +1366,54 @@ class ContextCliTests(unittest.TestCase):
         self.assertIn("You:     Latest user follow-up", output)
         self.assertIn("Agent:   Latest agent response", output)
 
+    def test_context_text_omits_last_user_when_it_matches_first(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "codex.jsonl"
+            path.write_text("session", encoding="utf-8")
+            meta = ConversationMeta(
+                path=path,
+                uuid="codex-context",
+                slug="context-session",
+                timestamp="2026-08-03T10:00:00Z",
+                cwd=str(root),
+                preview="Only request",
+                source="codex",
+            )
+            turns = [
+                Turn("user", "Only request"),
+                Turn("assistant", "Complete reply"),
+            ]
+
+            old_argv = sys.argv
+            old_cwd = Path.cwd()
+            sys.argv = ["agentconvos", "--context"]
+            stream = io.StringIO()
+            try:
+                os.chdir(root)
+                with (
+                    patch(
+                        "agentconvos.scanner.scan_projects",
+                        return_value=[Project("context", str(root), [meta])],
+                    ),
+                    patch("agentconvos.summarize.load_summaries", return_value={}),
+                    patch("agentconvos.app.parse_jsonl", return_value=turns),
+                    patch(
+                        "agentconvos.app.get_stats",
+                        return_value=ConversationStats(model="gpt-test", effort="high"),
+                    ),
+                    contextlib.redirect_stdout(stream),
+                ):
+                    main()
+            finally:
+                os.chdir(old_cwd)
+                sys.argv = old_argv
+
+        output = stream.getvalue()
+        self.assertIn("First:   Only request", output)
+        self.assertNotIn("You:", output)
+        self.assertIn("Agent:   Complete reply", output)
+
     def test_context_text_preserves_complete_multiline_messages(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

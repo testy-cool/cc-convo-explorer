@@ -31,7 +31,8 @@ turn count, model and effort, first user message, latest user message, latest ag
 message, and cached summary. Terminal and JSON output preserve the complete
 normalized message text. If Codex did not record a subagent's delegated prompt in
 the child transcript, the first-message field labels the retained delegated-task
-name instead. `--last N` remains the compact chronological view across all sources.
+name instead. The terminal omits the latest-user field when it would duplicate the
+first message. `--last N` remains the compact chronological view across all sources.
 
 Generate or refresh the cached one-sentence summaries with `agentconvos --summarize`.
 Each summary uses the complete normalized conversation in two Gemini passes: the first

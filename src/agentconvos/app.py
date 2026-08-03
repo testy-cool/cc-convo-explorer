@@ -2111,7 +2111,8 @@ def main() -> None:
                     if record["summary"]:
                         _print_context_field("Summary:", record["summary"])
                     _print_context_field("First:", record["first_message"])
-                    _print_context_field("You:", record["last_user_message"])
+                    if record["last_user_message"] != record["first_message"]:
+                        _print_context_field("You:", record["last_user_message"])
                     _print_context_field("Agent:", record["last_agent_message"])
                     print()
             else:
