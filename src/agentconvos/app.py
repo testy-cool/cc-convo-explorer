@@ -1754,6 +1754,24 @@ def _resume_description(meta: ConversationMeta) -> str:
     )
 
 
+def _run_charm_companion(command: str, env_var: str) -> None:
+    """Run a terminal UI companion with the caller's standard streams."""
+    import shutil
+    import subprocess
+    import sys
+
+    executable = os.environ.get(env_var) or shutil.which(command)
+    if not executable:
+        print(
+            f"Error: {command} is not installed or not on PATH",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    completed = subprocess.run([executable], check=False)
+    if completed.returncode:
+        raise SystemExit(completed.returncode)
+
+
 def main() -> None:
     import argparse
     import sys
@@ -1773,12 +1791,25 @@ def main() -> None:
             raise SystemExit(return_code)
         return
 
+    if len(sys.argv) > 1 and sys.argv[1] in {"pick", "tui"}:
+        if len(sys.argv) > 2:
+            print(f"usage: agentconvos {sys.argv[1]}", file=sys.stderr)
+            raise SystemExit(2)
+        if sys.argv[1] == "pick":
+            _run_charm_companion("agentconvos-pick", "AGENTCONVOS_PICKER")
+        else:
+            _run_charm_companion("agentconvos-tui", "AGENTCONVOS_TUI")
+        return
+
     parser = argparse.ArgumentParser(
         description="Browse and analyze Claude Code, Codex, Pi, Agy, and OpenCode conversations",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
-            'Commands:\n  recall "question"  Answer from evidence in the local conversation archive\n\n'
-            'Run: agentconvos recall "question"'
+            "Commands:\n"
+            "  pick               Choose a recent conversation inline\n"
+            "  tui                Open the full-screen conversation browser\n"
+            '  recall "question"  Answer from evidence in the local conversation archive\n\n'
+            'Run: agentconvos pick\n     agentconvos recall "question"'
         ),
     )
     parser.add_argument(
@@ -1843,6 +1874,14 @@ def main() -> None:
                         help="Show last N conversations for current directory (default: 1)")
     parser.add_argument("--context", action="store_true",
                         help="Quick project digest: last 5 sessions per agent with catch-up details")
+
+    if len(sys.argv) == 1:
+        if sys.stdin.isatty() and sys.stdout.isatty():
+            _run_charm_companion("agentconvos-pick", "AGENTCONVOS_PICKER")
+        else:
+            parser.print_help()
+        return
+
     args, remaining = parser.parse_known_args()
 
     if args.source and args.convo and args.source != args.convo:
