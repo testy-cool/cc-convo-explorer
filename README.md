@@ -45,6 +45,7 @@ are regenerated automatically.
 
 ```bash
 agentconvos recall "Where did we decide how scraper fallbacks should work?"
+agentconvos recall --backend agy "Where did we decide how scraper fallbacks should work?"
 ```
 
 `recall` searches the archive iteratively, opens only the promising conversation
@@ -52,7 +53,10 @@ turns, reconciles conflicting evidence, and answers with source, date, session,
 turn, and project-path citations. The retrieval worker runs ephemerally in an
 isolated workspace, treats transcript instructions as untrusted data, and keeps
 its model and retrieval plumbing out of the caller-facing interface. It requires
-an installed and authenticated Codex CLI.
+an installed and authenticated Codex CLI by default. Use `--backend agy` to run
+the same retrieval workflow through the local AGY bridge, which uses its Gemini
+3.6 Flash high-thinking default; `--backend luna` keeps the existing Codex Luna
+path explicit.
 
 In an interactive terminal, recall renders a live cockpit with elapsed time,
 retrieval stage, real search attempts, candidate and unique-session counts,

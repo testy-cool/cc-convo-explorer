@@ -3,6 +3,7 @@ import inspect
 import io
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -56,6 +57,29 @@ class RecallCommandTests(unittest.TestCase):
             "/tmp/answer.md",
         )
         self.assertEqual(command[-1], "-")
+
+    def test_agy_command_uses_the_bridge_default_model_and_explicit_workspace(self):
+        command = recall._recall_command(
+            Path("/tmp/workspace"),
+            Path("/tmp/state"),
+            Path("/tmp/answer.md"),
+            backend="agy",
+            prompt="Question from the archive",
+        )
+
+        self.assertEqual(
+            command[:5],
+            [
+                "/home/testycool/Work/try-rs/agy-bridge/agy-bridge",
+                "run",
+                "--workspace",
+                "/tmp/workspace",
+                "--json",
+            ],
+        )
+        self.assertEqual(command[-1], "Question from the archive")
+        self.assertNotIn("--model", command)
+        self.assertNotIn("--effort", command)
 
 
 class RecallProgressTests(unittest.TestCase):
@@ -251,6 +275,76 @@ class RecallStreamingTests(unittest.TestCase):
         self.assertNotIn("\x1b[", stderr.getvalue())
         self.assertEqual(len(created), 1)
         self.assertIn("untrusted data", created[0].stdin.captured)
+
+    def test_agy_backend_returns_the_bridge_answer(self):
+        bridge_result = {
+            "answer": "The matched conversation.\n\nSources: session-a\n",
+            "conversation_id": "bridge-session",
+            "effort": "high",
+            "exit_code": 0,
+            "model": "gemini-3.6-flash",
+            "ok": True,
+            "stderr": "",
+            "timed_out": False,
+        }
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        created: list[_FakeProcess] = []
+
+        def process_factory(command: list[str], **kwargs: object) -> _FakeProcess:
+            self.assertEqual(command[0], recall._AGY_BRIDGE)
+            self.assertEqual(command[1:5], ["run", "--workspace", command[3], "--json"])
+            self.assertEqual(command[-1], recall._recall_prompt("Where was it?", Path.cwd()))
+            self.assertEqual(kwargs["stdin"], subprocess.DEVNULL)
+            process = _FakeProcess([json.dumps(bridge_result) + "\n"])
+            created.append(process)
+            return process
+
+        with tempfile.TemporaryDirectory(prefix="agentconvos-recall-test-") as temporary:
+            exit_code = recall.run_recall(
+                "Where was it?",
+                backend="agy",
+                origin=Path.cwd(),
+                process_factory=process_factory,
+                state_dir=Path(temporary) / "state",
+                stdout=stdout,
+                stderr=stderr,
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stdout.getvalue(), bridge_result["answer"])
+        self.assertIn("querying AGY", stderr.getvalue())
+        self.assertEqual(len(created), 1)
+
+    def test_agy_backend_surfaces_bridge_provider_errors(self):
+        bridge_result = {
+            "answer": "",
+            "exit_code": 7,
+            "ok": False,
+            "stderr": "provider quota exhausted",
+            "timed_out": False,
+        }
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        def process_factory(command: list[str], **kwargs: object) -> _FakeProcess:
+            return _FakeProcess([json.dumps(bridge_result) + "\n"], returncode=7)
+
+        with tempfile.TemporaryDirectory(prefix="agentconvos-recall-test-") as temporary:
+            exit_code = recall.run_recall(
+                "Where was it?",
+                backend="agy",
+                origin=Path(temporary),
+                process_factory=process_factory,
+                state_dir=Path(temporary) / "state",
+                stdout=stdout,
+                stderr=stderr,
+            )
+
+        self.assertEqual(exit_code, 7)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("AGY bridge/provider failed", stderr.getvalue())
+        self.assertIn("provider quota exhausted", stderr.getvalue())
 
 
 if __name__ == "__main__":

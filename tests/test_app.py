@@ -701,7 +701,7 @@ class CliMetadataTests(unittest.TestCase):
 
 
 class RecallCliTests(unittest.TestCase):
-    def test_main_help_advertises_recall_without_backend_details(self):
+    def test_main_help_advertises_recall_backends(self):
         old_argv = sys.argv
         sys.argv = ["agentconvos", "--help"]
         stream = io.StringIO()
@@ -715,11 +715,12 @@ class RecallCliTests(unittest.TestCase):
         help_text = stream.getvalue()
         self.assertEqual(raised.exception.code, 0)
         self.assertIn("Commands:", help_text)
-        self.assertIn('agentconvos recall "question"', help_text)
-        self.assertNotIn("gpt-5.6", help_text.casefold())
-        self.assertNotIn("luna", help_text.casefold())
+        self.assertIn("recall [--backend {luna,agy}]", help_text)
+        self.assertIn("agentconvos recall", help_text)
+        self.assertIn("luna", help_text.casefold())
+        self.assertIn("agy", help_text.casefold())
 
-    def test_recall_runs_a_hidden_luna_high_retrieval_agent(self):
+    def test_recall_defaults_to_the_luna_backend(self):
         old_argv = sys.argv
         sys.argv = [
             "agentconvos",
@@ -737,7 +738,32 @@ class RecallCliTests(unittest.TestCase):
 
         run_tui.assert_not_called()
         run_recall.assert_called_once_with(
-            "Where did we decide the scraper fallback behavior?"
+            "Where did we decide the scraper fallback behavior?",
+            backend="luna",
+        )
+
+    def test_recall_accepts_the_agy_backend(self):
+        old_argv = sys.argv
+        sys.argv = [
+            "agentconvos",
+            "recall",
+            "--backend",
+            "agy",
+            "Where did we decide the scraper fallback behavior?",
+        ]
+        try:
+            with (
+                patch("agentconvos.recall.run_recall", return_value=0) as run_recall,
+                patch("agentconvos.app.ConvoExplorer.run") as run_tui,
+            ):
+                main()
+        finally:
+            sys.argv = old_argv
+
+        run_tui.assert_not_called()
+        run_recall.assert_called_once_with(
+            "Where did we decide the scraper fallback behavior?",
+            backend="agy",
         )
 
 

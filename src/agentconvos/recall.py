@@ -21,8 +21,11 @@ from rich.table import Table
 from rich.text import Text
 
 
+_AGY_BRIDGE = "/home/testycool/Work/try-rs/agy-bridge/agy-bridge"
 _RECALL_MODEL = "gpt-5.6-luna"
 _RECALL_EFFORT = "high"
+_RECALL_BACKENDS = ("luna", "agy")
+_DEFAULT_RECALL_BACKEND = "luna"
 _RECALL_ACTIVE_ENV = "AGENTCONVOS_RECALL_ACTIVE"
 _STATE_DIR = Path(os.environ.get("USERPROFILE", Path.home())) / ".claude" / "convo-explorer"
 _SESSION_ID = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.I)
@@ -68,7 +71,21 @@ def _recall_command(
     workspace: Path,
     state_dir: Path,
     answer_path: Path,
+    *,
+    backend: str = _DEFAULT_RECALL_BACKEND,
+    prompt: str = "",
 ) -> list[str]:
+    if backend == "agy":
+        return [
+            _AGY_BRIDGE,
+            "run",
+            "--workspace",
+            str(workspace),
+            "--json",
+            prompt,
+        ]
+    if backend != "luna":
+        raise ValueError(f"unsupported recall backend: {backend}")
     return [
         "codex",
         "exec",
@@ -92,6 +109,54 @@ def _recall_command(
         str(state_dir),
         "-",
     ]
+
+
+def _agy_result(
+    output: str,
+    stderr: str,
+    returncode: int,
+) -> tuple[str, str | None, int]:
+    """Extract an AGY answer or a useful bridge/provider failure."""
+    payload: dict[str, object] | None = None
+    for line in reversed(output.splitlines()):
+        try:
+            candidate = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(candidate, dict):
+            payload = candidate
+            break
+
+    if payload is None:
+        detail = stderr.strip() or output.strip() or f"exit code {returncode}"
+        return "", f"Error: AGY bridge/provider failed: invalid JSON ({detail})", returncode or 1
+
+    answer = payload.get("answer")
+    bridge_exit = payload.get("exit_code")
+    if (
+        returncode == 0
+        and payload.get("ok") is True
+        and isinstance(answer, str)
+        and answer.strip()
+    ):
+        return answer, None, 0
+
+    details: list[str] = []
+    if payload.get("timed_out") is True:
+        details.append("timed out")
+    for key in ("stderr", "error", "message"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            details.append(value.strip())
+    if stderr.strip() and stderr.strip() not in details:
+        details.append(stderr.strip())
+    if not details:
+        details.append(f"exit code {bridge_exit if isinstance(bridge_exit, int) else returncode}")
+
+    exit_code = returncode
+    if exit_code == 0 and isinstance(bridge_exit, int) and bridge_exit:
+        exit_code = bridge_exit
+    return "", f"Error: AGY bridge/provider failed: {'; '.join(details)}", exit_code or 1
 
 
 def _captured_group(match: re.Match[str] | None) -> str | None:
@@ -318,6 +383,7 @@ def _parse_event(line: str) -> dict[str, object] | None:
 def run_recall(
     question: str,
     *,
+    backend: str = _DEFAULT_RECALL_BACKEND,
     origin: Path | None = None,
     process_factory: Callable[..., subprocess.Popen[str]] | None = None,
     state_dir: Path | None = None,
@@ -330,6 +396,10 @@ def run_recall(
     stderr = stderr or sys.stderr
     if not question:
         print("Error: recall requires a question", file=stderr)
+        return 2
+    if backend not in _RECALL_BACKENDS:
+        choices = ", ".join(_RECALL_BACKENDS)
+        print(f"Error: unsupported recall backend '{backend}' (choose: {choices})", file=stderr)
         return 2
     if os.environ.get(_RECALL_ACTIVE_ENV):
         print("Error: nested agentconvos recall calls are disabled", file=stderr)
@@ -351,9 +421,17 @@ def run_recall(
         with tempfile.TemporaryDirectory(prefix="agentconvos-recall-") as temporary:
             workspace = Path(temporary)
             answer_path = workspace / "answer.md"
-            command = _recall_command(workspace, state_dir, answer_path)
+            prompt = _recall_prompt(question, origin)
+            command = _recall_command(
+                workspace,
+                state_dir,
+                answer_path,
+                backend=backend,
+                prompt=prompt if backend == "agy" else "",
+            )
             if not interactive:
-                print("Recall · understanding request", file=stderr, flush=True)
+                stage = "querying AGY" if backend == "agy" else "understanding request"
+                print(f"Recall · {stage}", file=stderr, flush=True)
             live = Live(
                 progress,
                 console=console,
@@ -361,33 +439,58 @@ def run_recall(
                 transient=False,
             ) if console else contextlib.nullcontext()
             with live:
-                process = spawn(
-                    command,
-                    stdin=subprocess.PIPE,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    bufsize=1,
-                    cwd=workspace,
-                    env=environment,
-                )
-                if process.stdin is None or process.stdout is None:
-                    raise RuntimeError("Codex process streams are unavailable")
-                process.stdin.write(_recall_prompt(question, origin))
-                process.stdin.close()
-                for raw_line in process.stdout:
-                    event = _parse_event(raw_line)
-                    if event is None:
-                        if len("".join(diagnostics)) < 32 * 1024:
-                            diagnostics.append(raw_line)
-                        continue
-                    notice = progress.consume(event)
-                    if console:
-                        live.refresh()
-                    elif notice:
-                        print(f"Recall · {notice}", file=stderr, flush=True)
-                returncode = process.wait()
-                answer = answer_path.read_text() if answer_path.exists() else ""
+                if backend == "agy":
+                    process = spawn(
+                        command,
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        bufsize=1,
+                        cwd=workspace,
+                        env=environment,
+                    )
+                    if process.stdout is None:
+                        raise RuntimeError("AGY bridge output stream is unavailable")
+                    raw_output = process.stdout.read()
+                    process_stderr = getattr(process, "stderr", None)
+                    raw_stderr = process_stderr.read() if process_stderr is not None else ""
+                    returncode = process.wait()
+                    answer, diagnostic, returncode = _agy_result(
+                        raw_output,
+                        raw_stderr,
+                        returncode,
+                    )
+                    if diagnostic:
+                        diagnostics.append(diagnostic)
+                else:
+                    process = spawn(
+                        command,
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        bufsize=1,
+                        cwd=workspace,
+                        env=environment,
+                    )
+                    if process.stdin is None or process.stdout is None:
+                        raise RuntimeError("Codex process streams are unavailable")
+                    process.stdin.write(prompt)
+                    process.stdin.close()
+                    for raw_line in process.stdout:
+                        event = _parse_event(raw_line)
+                        if event is None:
+                            if len("".join(diagnostics)) < 32 * 1024:
+                                diagnostics.append(raw_line)
+                            continue
+                        notice = progress.consume(event)
+                        if console:
+                            live.refresh()
+                        elif notice:
+                            print(f"Recall · {notice}", file=stderr, flush=True)
+                    returncode = process.wait()
+                    answer = answer_path.read_text() if answer_path.exists() else ""
                 progress.finish(answer, succeeded=returncode == 0 and bool(answer.strip()))
                 if console:
                     live.refresh()
@@ -403,7 +506,10 @@ def run_recall(
                 return 1
             return returncode
     except FileNotFoundError:
-        print("Error: Codex CLI is not installed or not on PATH", file=stderr)
+        if backend == "agy":
+            print(f"Error: AGY bridge is not installed at {_AGY_BRIDGE}", file=stderr)
+        else:
+            print("Error: Codex CLI is not installed or not on PATH", file=stderr)
         return 127
     except KeyboardInterrupt:
         if process is not None:

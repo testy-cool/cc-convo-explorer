@@ -1760,15 +1760,25 @@ def main() -> None:
     from importlib.metadata import version as package_version
 
     if len(sys.argv) > 1 and sys.argv[1] == "recall":
+        from .recall import _DEFAULT_RECALL_BACKEND, _RECALL_BACKENDS, run_recall
+
         recall_parser = argparse.ArgumentParser(
             prog="agentconvos recall",
             description="Answer a question from evidence in your local conversation archive.",
         )
+        recall_parser.add_argument(
+            "--backend",
+            choices=_RECALL_BACKENDS,
+            default=_DEFAULT_RECALL_BACKEND,
+            help="Retrieval backend (default: luna; agy uses Gemini 3.6 Flash)",
+        )
         recall_parser.add_argument("question", nargs="+", help="Question to investigate")
         recall_args = recall_parser.parse_args(sys.argv[2:])
-        from .recall import run_recall
 
-        return_code = run_recall(" ".join(recall_args.question))
+        return_code = run_recall(
+            " ".join(recall_args.question),
+            backend=recall_args.backend,
+        )
         if return_code:
             raise SystemExit(return_code)
         return
@@ -1777,7 +1787,7 @@ def main() -> None:
         description="Browse and analyze Claude Code, Codex, Pi, Agy, and OpenCode conversations",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
-            'Commands:\n  recall "question"  Answer from evidence in the local conversation archive\n\n'
+            'Commands:\n  recall [--backend {luna,agy}] "question"  Answer from evidence in the local conversation archive\n\n'
             'Run: agentconvos recall "question"'
         ),
     )
