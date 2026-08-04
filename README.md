@@ -2,7 +2,7 @@
 
 Discover, query, and browse AI coding agent conversations. Works with Claude Code, Codex, Pi, Agy, OpenCode, and durable Clihow question threads.
 
-Use as a **CLI** (`agentconvos --context --json`), a **Python library** (`from agentconvos import scan_projects`), or an **inline conversation picker** (`agentconvos`).
+Use as a **CLI** (`agentconvos --context --json`), a **Python library** (`from agentconvos import scan_projects`), or an **interactive TUI** (`agentconvos`).
 
 <img src="assets/demo.svg" alt="agentconvos demo">
 
@@ -13,17 +13,6 @@ uv tool install "agentconvos[ai] @ git+https://github.com/testy-cool/agentconvos
 ```
 
 Without Gemini analysis: drop `[ai]`. Requires Python 3.12+.
-
-The interactive commands use the Go companion binaries (Go 1.25.8+):
-
-```bash
-cd tui
-go build -o ~/.local/bin/agentconvos-pick ./cmd/agentconvos-pick
-go build -o ~/.local/bin/agentconvos-tui .
-```
-
-Keep `~/.local/bin` on `PATH`. Noninteractive Python and JSON commands do not
-require the companions.
 
 ## CLI
 
@@ -201,25 +190,16 @@ hits = search([c.path for p in projects for c in p.conversations], "auth")
 stats = get_stats(projects[0].conversations[0].path)
 ```
 
-## Interactive browsing
+## TUI
 
 ```bash
-agentconvos           # inline picker; selection stays in shell scrollback
-agentconvos pick      # the same inline flow, explicitly
-agentconvos tui       # full-screen browser
+agentconvos
 ```
 
-The default interactive flow shows the five most recent conversations per agent
-for the current project. Use the arrow keys to select, `/` to filter, Enter to
-print the complete catch-up view into normal shell scrollback, or Esc/Ctrl+C to
-cancel. The printed view includes available project, source, date, turn, model,
-effort, summary, opening, latest-user, and complete latest-agent content; missing
-or duplicate fields are omitted.
-
-The explicit full-screen browser is an interactive tree grouped by agent/source
-(Claude Code, Codex, Pi, Agy, OpenCode, Clihow) with search, multi-select,
-preview, export, and Gemini analysis. The `R` action continues Clihow threads
-through `clihow ask --thread`; it keeps native provider resume distinct.
+Interactive tree grouped by agent/source (Claude Code, Codex, Pi, Agy, OpenCode,
+Clihow) with search, multi-select, preview, export, and Gemini analysis. The
+`R` action continues Clihow threads through `clihow ask --thread`; it keeps
+native provider resume distinct.
 
 The history tree renders from cached metadata immediately. A persistent SQLite
 full-text index updates in the background, with progress shown in the lower-right
