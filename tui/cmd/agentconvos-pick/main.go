@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
@@ -72,17 +73,23 @@ func huhSelector(project string, width, height int, input io.Reader, output io.W
 			huhOptions = append(huhOptions, huh.NewOption(label, option.Value))
 		}
 
-		visibleRows := min(len(huhOptions), max(4, height-8))
+		visibleRows := min(len(huhOptions), max(3, height-9))
 		visibleRows = min(10, visibleRows)
 		field := huh.NewSelect[string]().
-			Title("Recent conversations").
-			Description(projectDescription(project, len(options))).
+			Title(projectHeading(project)).
 			Options(huhOptions...).
 			Value(&selected).
 			Height(visibleRows)
 
 		keymap := huh.NewDefaultKeyMap()
 		keymap.Quit = key.NewBinding(key.WithKeys("esc", "ctrl+c"))
+		keymap.Select.Submit.SetHelp("enter", "open")
+		keymap.Select.Filter.SetHelp("/", "filter")
+		keymap.Select.SetFilter.SetKeys("esc", "ctrl+c")
+		keymap.Select.SetFilter.SetHelp("esc/ctrl+c", "cancel")
+		keymap.Select.ClearFilter.SetKeys("esc", "ctrl+c")
+		keymap.Select.ClearFilter.SetHelp("esc/ctrl+c", "cancel")
+		keymap.Select.ClearFilter.SetEnabled(true)
 		form := huh.NewForm(huh.NewGroup(field)).
 			WithInput(input).
 			WithOutput(output).
@@ -108,20 +115,25 @@ func optionLabel(option inlinepicker.Option, width int) string {
 	return ansi.Truncate(option.Title, titleWidth, "…") + " · " + metadata
 }
 
-func projectDescription(project string, count int) string {
-	project = displayPath(project)
-	if project == "" {
-		return fmt.Sprintf("%d recent · ↑/↓ move · / filter · enter open · esc cancel", count)
+func projectHeading(project string) string {
+	name := compactProjectName(project)
+	if name == "" {
+		return "agentconvos\nRecent conversations"
 	}
-	return fmt.Sprintf("%s · %d recent · ↑/↓ move · / filter · enter open · esc cancel", project, count)
+	return fmt.Sprintf("agentconvos / %s\nRecent conversations", name)
 }
 
-func displayPath(path string) string {
-	home, err := os.UserHomeDir()
-	if err == nil && strings.HasPrefix(path, home) {
-		return "~" + strings.TrimPrefix(path, home)
+func compactProjectName(project string) string {
+	project = strings.TrimSpace(project)
+	if project == "" {
+		return ""
 	}
-	return path
+	cleaned := filepath.Clean(project)
+	name := filepath.Base(cleaned)
+	if name == "." || name == string(filepath.Separator) {
+		return project
+	}
+	return name
 }
 
 func neutralTheme() huh.Theme {

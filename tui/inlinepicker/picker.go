@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -153,39 +154,38 @@ func RenderDetail(payload ContextPayload, conversation Conversation, options Ren
 	titleStyle := lipgloss.NewStyle()
 	metaStyle := lipgloss.NewStyle()
 	labelStyle := lipgloss.NewStyle()
-	separatorStyle := lipgloss.NewStyle()
 	if options.Color {
 		titleStyle = titleStyle.Foreground(lipgloss.Color("#F2F2F2")).Bold(true)
 		metaStyle = metaStyle.Foreground(lipgloss.Color("#929292"))
-		labelStyle = labelStyle.Foreground(lipgloss.Color("#78A9D4")).Bold(true)
-		separatorStyle = separatorStyle.Foreground(lipgloss.Color("#454545"))
+		labelStyle = labelStyle.Foreground(lipgloss.Color("#F2F2F2")).Bold(true)
 	}
 
 	var document strings.Builder
 	document.WriteString("\n")
-	document.WriteString(titleStyle.Render(conversationTitle(conversation)))
+	document.WriteString(titleStyle.Render("Opened " + conversationTitle(conversation)))
 	document.WriteString("\n")
 
+	if project := compactProjectName(payload.Project); project != "" {
+		document.WriteString(metaStyle.Render(project))
+		document.WriteString("\n")
+	}
 	context := nonEmpty(
-		prefixed("Project", payload.Project),
 		formatDate(conversation.Timestamp),
 		strings.ToLower(conversation.Source),
-		turnLabel(conversation.TurnCount),
 		conversation.Model,
 		conversation.Effort,
+		turnLabel(conversation.TurnCount),
 	)
 	if len(context) > 0 {
 		document.WriteString(metaStyle.Render(strings.Join(context, " · ")))
 		document.WriteString("\n")
 	}
-	document.WriteString(separatorStyle.Render(strings.Repeat("─", min(width, 72))))
-	document.WriteString("\n")
 
 	sections := []struct {
 		label string
 		text  string
 	}{
-		{label: "Summary", text: conversation.Summary},
+		{label: "Recap", text: conversation.Summary},
 		{label: "First message", text: conversation.FirstMessage},
 	}
 	if normalized(conversation.LastUserMessage) != normalized(conversation.FirstMessage) {
@@ -332,7 +332,7 @@ func formatDate(value string) string {
 	}
 	parsed, err := time.Parse(time.RFC3339Nano, value)
 	if err != nil {
-		return value[:min(len(value), 10)]
+		return ""
 	}
 	return parsed.Format("02 Jan 2006")
 }
@@ -347,11 +347,17 @@ func turnLabel(turns int) string {
 	return fmt.Sprintf("%d turns", turns)
 }
 
-func prefixed(label, value string) string {
-	if strings.TrimSpace(value) == "" {
+func compactProjectName(project string) string {
+	project = strings.TrimSpace(project)
+	if project == "" {
 		return ""
 	}
-	return label + " " + value
+	cleaned := filepath.Clean(project)
+	name := filepath.Base(cleaned)
+	if name == "." || name == string(filepath.Separator) {
+		return project
+	}
+	return name
 }
 
 func normalized(value string) string {

@@ -1,6 +1,6 @@
 # AgentConvos inline picker — implementation specification
 
-Status: proposed, implementation not started
+Status: proposed revision of the existing inline picker; visual and hierarchy pass only
 
 ## Outcome
 
@@ -60,14 +60,17 @@ roles:
 
 | Role | Treatment |
 |---|---|
-| Primary | Terminal-default or warm off-white foreground |
+| Primary | Terminal-default or off-white foreground |
 | Muted | Readable neutral gray for metadata and secondary help |
 | Accent | One restrained cyan for the selection marker and active key names |
 
 Lip Gloss may compose labels and selected-detail headings. Glamour continues to
-render message Markdown. Terminal font, terminal background, window border,
-shadow, and outer window chrome are owned by the user's terminal emulator and
-are not part of AgentConvos.
+render message Markdown. Huh applies one style to an entire option, so option
+keys remain plain, uniformly styled text; do not mix title and metadata colors
+inside one option and do not embed ANSI sequences in option keys because Huh's
+filter must continue matching the underlying text reliably. Terminal font,
+terminal background, window border, shadow, and outer window chrome are owned
+by the user's terminal emulator and are not part of AgentConvos.
 
 No new UI dependency is required.
 
@@ -113,30 +116,29 @@ message, or timestamp.
 
 ### Conversation rows
 
-At ordinary widths, each option uses two visual lines:
+Use a compact one-line option by default:
 
 ```text
-› Make AgentConvos shell-native
-  codex · 04 Aug · 306 turns
+› Make AgentConvos shell-native · codex · 04 Aug 2026 · 306 turns
 ```
 
-- The selection marker is `›` in the accent color.
-- The selected title is semibold or bold, depending on terminal support.
-- Unselected titles use normal primary text.
-- Metadata uses muted text and a consistent two-cell indent.
+- The selection marker is `›` in the accent color, while Huh keeps the option
+  text itself uniformly styled for reliable filtering.
+- Selected and unselected options may use Huh's uniform selection-state styles;
+  no mixed title/metadata treatment is required.
 - Model and effort do not appear in the picker row; they belong in detail.
 - There is no selected-row background, card, border, badge, or underline.
 - Rows are compact. Do not add a blank line after every option.
 
-If Huh cannot preserve a two-line option at a supported width, use this
-one-line fallback rather than replacing Huh:
-
-```text
-› Make AgentConvos shell-native · codex · 04 Aug · 306 turns
-```
+This one-line fallback is intentional: it keeps plain option keys compatible
+with Huh filtering and avoids fighting Huh's renderer. If a future revision
+uses two-line rows, its Huh `Height` must be budgeted from the rendered
+`lipgloss.Height` of the title, description, options, and help; Huh counts
+rendered lines, not logical records.
 
 Truncate the title before metadata. Preserve source, date, and turn count when
-space permits.
+space permits. Use one date format everywhere in the picker: `02 Jan 2006`,
+including the year.
 
 ### Header and help
 
@@ -144,7 +146,6 @@ The picker establishes the command and project without a banner:
 
 ```text
 agentconvos / convo-explorer
-
 Recent conversations
 ```
 
@@ -152,14 +153,16 @@ Use the current project's final path component for the compact project label.
 The complete path remains available from the backend and must not be repeated
 in every row.
 
-The help line uses Huh's existing help behavior and these action words:
+The field description is reserved for the heading and contains no key help.
+Expose actions only through Huh's help model and binding help text. Keep the
+whole stock help line uniformly muted; do not color only `enter` and `esc`.
+Use these action words:
 
 ```text
 ↑↓ move   / filter   enter open   esc cancel
 ```
 
-Only the active key names `enter` and `esc` may use the accent. Symbols and
-descriptions remain muted. Do not add a footer box.
+Symbols, key names, and descriptions remain muted. Do not add a footer box.
 
 ### Interaction
 
@@ -204,20 +207,20 @@ Rules:
 - Render Markdown without code-block backgrounds or decorative margins.
 - Wrap to the terminal width using ANSI-aware measurement.
 - Omit the horizontal separator used by the current renderer.
-- Section labels use primary semibold text, not the accent color.
+- Section labels use primary bold text, not the accent color.
 - Do not print an extra duplicate copy of the selected conversation.
 
 ## Responsive behavior
 
 ### Ordinary terminals: 72 columns and wider
 
-- Prefer two-line picker rows.
+- Use the compact one-line picker rows.
 - Show at most ten visible options; let Huh scroll additional options.
 - Wrap detail content to the available terminal width.
 
 ### Narrow terminals: 40–71 columns
 
-- Prefer the one-line option fallback.
+- Keep the one-line option format.
 - Truncate title before metadata.
 - Allow detail headings and body content to wrap naturally.
 - Keep selection, filtering, opening, and cancellation fully usable.
@@ -236,10 +239,14 @@ emit broken ANSI sequences, or enter the alternate screen.
 
 ## Empty and failure states
 
-- No conversations: print `No conversations found for <project>.` and exit 0.
+- No conversations: print `No conversations found for <project>.` and exit 0;
+  retain the existing full project path in this empty-state message. Detail
+  output uses only the compact project name.
 - User cancellation: print no detail and exit 0.
 - Backend failure: print the existing concise `agentconvos pick:` error to
   stderr and exit non-zero.
+- Selector and Markdown-rendering errors preserve the current output stream;
+  backend-loading errors remain on stderr.
 - Selected record unavailable: print the existing unavailable error and exit
   non-zero.
 - Markdown rendering failure: name the failed section and exit non-zero.
@@ -270,7 +277,8 @@ Do not add modal dialogs or retry UI.
 2. The picker never emits alternate-screen enter/leave sequences.
 3. Results are globally recency-sorted after the five-per-source cap.
 4. The newest result is selected initially.
-5. Every option exposes title, source, date, and turn count.
+5. Available option metadata appears: title, source, date, and turn count when
+   recorded.
 6. Selection is visible without relying on color alone.
 7. `/`, arrows, `Enter`, `Esc`, and `Ctrl+C` retain their declared behavior.
 8. The selected detail includes available recap, first message, distinct latest
@@ -322,7 +330,8 @@ Expected files:
 
 - `tui/cmd/agentconvos-pick/main.go`: Huh composition, labels, and theme roles;
 - `tui/cmd/agentconvos-pick/main_test.go`: interaction and responsive labels;
-- `tui/inlinepicker/picker.go`: selected-detail hierarchy;
+- `tui/inlinepicker/picker.go`: selected-detail hierarchy, picker option labels,
+  and picker date formatting;
 - `tui/inlinepicker/picker_test.go`: complete detail and omission contracts.
 
 No other production file should need to change.
