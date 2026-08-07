@@ -466,7 +466,15 @@ class TuiErgonomicsTests(unittest.IsolatedAsyncioTestCase):
                     await pilot.pause()
                     search = tui.query_one("#filter-input", Input)
                     search.value = "auth middleware"
-                    await pilot.pause()
+                    for _ in range(30):
+                        await pilot.pause(0.03)
+                        result_nodes = [
+                            node
+                            for node in tui._walk_tree_nodes()
+                            if node.data and node.data.kind == "convo"
+                        ]
+                        if result_nodes and "drops request IDs" in result_nodes[0].label.plain:
+                            break
 
                     result_nodes = [
                         node
@@ -476,6 +484,138 @@ class TuiErgonomicsTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(len(result_nodes), 1)
                     self.assertIn("drops request IDs", result_nodes[0].label.plain)
                     parse_transcript.assert_not_called()
+
+    async def test_filter_input_debounces_intermediate_queries(self):
+        class RecordingIndex:
+            def __init__(self):
+                self.queries = []
+
+            def search(self, query):
+                self.queries.append(query)
+                return {}
+
+            def sync(self, conversations, **_kwargs):
+                conversations = list(conversations)
+                return SimpleNamespace(
+                    total=len(conversations),
+                    checked=len(conversations),
+                    indexed=0,
+                    unchanged=len(conversations),
+                    removed=0,
+                    failed=0,
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp)
+            path = cwd / "session.jsonl"
+            path.write_text("", encoding="utf-8")
+            meta = _meta(path, "debounce-session", "2026-07-18T10:30:00", cwd)
+            project = Project("tmp", str(cwd), [meta])
+            index = RecordingIndex()
+
+            with patch("agentconvos.app.scan_projects", return_value=[project]):
+                tui = app_module.ConvoExplorer(search_index=index)
+                async with tui.run_test(size=(110, 36)) as pilot:
+                    for _ in range(20):
+                        await pilot.pause()
+                        if "INDEX READY" in str(
+                            tui.query_one("#index-status", Static).render()
+                        ):
+                            break
+
+                    index.queries.clear()
+                    search = tui.query_one("#filter-input", Input)
+                    search.value = "a"
+                    await pilot.pause(0.03)
+                    search.value = "ag"
+                    await pilot.pause(0.03)
+                    search.value = "agentconvos"
+                    await pilot.pause(0.03)
+
+                    self.assertEqual(index.queries, [])
+
+                    await pilot.pause(0.25)
+                    for _ in range(20):
+                        await pilot.pause()
+                        if index.queries:
+                            break
+
+                    self.assertEqual(index.queries, ["agentconvos"])
+
+    async def test_stale_filter_result_is_discarded_before_tree_mutation(self):
+        with patch("agentconvos.app.scan_projects", return_value=[]):
+            tui = app_module.ConvoExplorer()
+            async with tui.run_test(size=(100, 32)):
+                tui._filter_query = "agentconvos"
+                tui._filter_generation = 2
+                stale_result = SimpleNamespace(
+                    projects=[],
+                    indexed_matches={},
+                    filtered_count=0,
+                )
+
+                with (
+                    patch.object(tui, "_populate_tree") as populate_tree,
+                    patch.object(tui, "_show_search_summary") as show_summary,
+                ):
+                    tui._filter_finished("a", 1, stale_result)
+
+                populate_tree.assert_not_called()
+                show_summary.assert_not_called()
+
+    async def test_broad_filter_is_bounded_and_applied_in_one_batch(self):
+        class BroadIndex:
+            def search(self, query):
+                if query != "a":
+                    return {}
+                return {meta.uuid: "a broad match" for meta in metas}
+
+            def sync(self, conversations, **_kwargs):
+                conversations = list(conversations)
+                return SimpleNamespace(
+                    total=len(conversations),
+                    checked=len(conversations),
+                    indexed=0,
+                    unchanged=len(conversations),
+                    removed=0,
+                    failed=0,
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp)
+            metas = [
+                _meta(
+                    cwd / f"session-{index}.jsonl",
+                    f"broad-session-{index}",
+                    "2026-07-18T10:30:00",
+                    cwd,
+                )
+                for index in range(225)
+            ]
+            project = Project("tmp", str(cwd), metas)
+
+            with patch("agentconvos.app.scan_projects", return_value=[project]):
+                tui = app_module.ConvoExplorer(search_index=BroadIndex())
+                with patch.object(tui, "batch_update", wraps=tui.batch_update) as batch_update:
+                    async with tui.run_test(size=(110, 36)) as pilot:
+                        await pilot.pause()
+                        search = tui.query_one("#filter-input", Input)
+                        search.value = "a"
+                        for _ in range(40):
+                            await pilot.pause(0.03)
+                            result_nodes = [
+                                node
+                                for node in tui._walk_tree_nodes()
+                                if node.data and node.data.kind == "convo"
+                            ]
+                            if result_nodes and "RESULTS" in str(
+                                tui.query_one("#left-title", Static).render()
+                            ):
+                                break
+
+                        self.assertEqual(len(result_nodes), 200)
+
+                    self.assertGreaterEqual(batch_update.call_count, 2)
 
     async def test_preview_shows_loading_state_while_transcript_parses(self):
         class ReadyIndex:
@@ -659,7 +799,18 @@ class TuiErgonomicsTests(unittest.IsolatedAsyncioTestCase):
                                 break
                         search = tui.query_one("#filter-input", Input)
                         search.value = "auth middleware"
-                        await pilot.pause()
+                        for _ in range(30):
+                            await pilot.pause(0.03)
+                            result_nodes = [
+                                node
+                                for node in tui._walk_tree_nodes()
+                                if node.data and node.data.kind == "convo"
+                            ]
+                            if not any(
+                                node.data and node.data.kind == "convo"
+                                for node in tui._walk_tree_nodes()
+                            ):
+                                break
                         self.assertFalse(
                             any(
                                 node.data and node.data.kind == "convo"
@@ -781,7 +932,17 @@ class TuiErgonomicsTests(unittest.IsolatedAsyncioTestCase):
                     search = tui.query_one("#filter-input", Input)
                     search.focus()
                     search.value = "auth middleware"
-                    await pilot.pause()
+                    for _ in range(30):
+                        await pilot.pause(0.03)
+                        result_nodes = [
+                            node
+                            for node in tui._walk_tree_nodes()
+                            if node.data and node.data.kind == "convo"
+                        ]
+                        if result_nodes and "RESULTS" in str(
+                            tui.query_one("#left-title", Static).render()
+                        ):
+                            break
 
                     result_nodes = [
                         node

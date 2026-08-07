@@ -42,6 +42,8 @@ _SOURCE_STYLE = {
 }
 _SOURCE_ORDER = ["claude", "codex", "pi", "agy", "opencode", "clihow"]
 _RESUMABLE_SOURCES = frozenset(_SOURCE_ORDER)
+_FILTER_DEBOUNCE_SECONDS = 0.18
+_FILTER_RESULT_LIMIT = 200
 
 
 def _group_key(display_path: str, source: str) -> tuple[str, str]:
@@ -344,6 +346,13 @@ class NodeData:
     is_cwd: bool = False
 
 
+@dataclass(frozen=True)
+class _FilterResult:
+    projects: list[Project]
+    indexed_matches: dict[str, str]
+    filtered_count: int
+
+
 class ConvoExplorer(App):
     CSS = """
     Screen {
@@ -485,6 +494,9 @@ class ConvoExplorer(App):
         self._index_progress = IndexSyncStats(total=0)
         self._summaries: dict[str, str] = {}
         self._analyzed_set: set[str] = set()
+        self._filter_timer = None
+        self._filter_query = ""
+        self._filter_generation = 0
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -587,6 +599,8 @@ History appears immediately. Full-text results arrive live while indexing runs i
         self._indexing = True
         self._set_index_progress(IndexSyncStats(total=len(index_conversations)))
         self.build_search_index(index_conversations)
+        if self._filter_query:
+            self._schedule_filter()
 
     @work(thread=True, exclusive=True, group="search-index")
     def build_search_index(self, conversations: list[ConversationMeta]) -> None:
@@ -622,9 +636,8 @@ History appears immediately. Full-text results arrive live while indexing runs i
         search_input = self.query_one("#filter-input", Input)
         query = search_input.value.strip()
         if query and progress.checked:
-            self._populate_tree(self.projects, filter_text=query)
-            if search_input.has_focus or self.current_meta is None:
-                self._show_search_summary(query)
+            self._filter_query = query
+            self._schedule_filter()
 
     def _index_finished(self, progress: IndexSyncStats) -> None:
         self._indexing = False
@@ -637,9 +650,8 @@ History appears immediately. Full-text results arrive live while indexing runs i
         search_input = self.query_one("#filter-input", Input)
         query = search_input.value.strip()
         if query:
-            self._populate_tree(self.projects, filter_text=query)
-            if search_input.has_focus or self.current_meta is None:
-                self._show_search_summary(query)
+            self._filter_query = query
+            self._schedule_filter()
 
     def _index_failed(self, message: str) -> None:
         self._indexing = False
@@ -663,18 +675,139 @@ History appears immediately. Full-text results arrive live while indexing runs i
         name_lower = name.lower().replace("\\", " ").replace("/", " ").replace("-", " ")
         return any(name_lower in a.replace("-", " ") for a in self._analyzed_set)
 
-    def _populate_tree(self, projects: list, filter_text: str = "") -> None:
+    def _prepare_filter(
+        self,
+        projects: list[Project],
+        filter_text: str,
+        summaries: dict[str, str] | None = None,
+    ) -> _FilterResult:
+        """Search and select the conversations that should be rendered."""
+        terms = parse_search_terms(filter_text)
+        if not terms:
+            return _FilterResult(
+                projects=list(projects),
+                indexed_matches={},
+                filtered_count=sum(len(project.conversations) for project in projects),
+            )
+
+        try:
+            indexed_matches = self._conversation_index.search(filter_text)
+        except Exception:
+            indexed_matches = {}
+
+        summaries = self._summaries if summaries is None else summaries
+        filtered_projects: list[Project] = []
+        filtered_count = 0
+        for project in projects:
+            matches = []
+            for conversation in project.conversations:
+                metadata = "\n".join(
+                    (
+                        conversation.slug or "",
+                        conversation.uuid,
+                        conversation.preview or "",
+                        summaries.get(conversation.uuid, ""),
+                        project.display_path,
+                    )
+                ).casefold()
+                if conversation.uuid in indexed_matches or all(
+                    term in metadata for term in terms
+                ):
+                    matches.append(conversation)
+
+            if not matches:
+                continue
+            remaining = _FILTER_RESULT_LIMIT - filtered_count
+            if remaining <= 0:
+                break
+            visible = matches[:remaining]
+            filtered_projects.append(
+                Project(project.folder_name, project.display_path, visible)
+            )
+            filtered_count += len(visible)
+
+        return _FilterResult(
+            projects=filtered_projects,
+            indexed_matches=indexed_matches,
+            filtered_count=filtered_count,
+        )
+
+    def _schedule_filter(self) -> None:
+        """Coalesce filter changes before starting the background search."""
+        self._filter_generation += 1
+        if self._filter_timer is not None:
+            self._filter_timer.stop()
+        self._filter_timer = self.set_timer(
+            _FILTER_DEBOUNCE_SECONDS,
+            self._run_latest_filter,
+        )
+
+    def _run_latest_filter(self) -> None:
+        self._filter_timer = None
+        self._run_filter_in_background(
+            list(self.projects),
+            self._filter_query,
+            self._filter_generation,
+        )
+
+    @work(thread=True, exclusive=True, group="filter")
+    def _run_filter_in_background(
+        self,
+        projects: list[Project],
+        query: str,
+        generation: int,
+    ) -> None:
+        worker = get_current_worker()
+        result = self._prepare_filter(projects, query, dict(self._summaries))
+        if not worker.is_cancelled:
+            self.call_from_thread(self._filter_finished, query, generation, result)
+
+    def _filter_finished(
+        self,
+        query: str,
+        generation: int,
+        result: _FilterResult,
+    ) -> None:
+        """Apply a worker result only if it still matches the current input."""
+        if generation != self._filter_generation or query != self._filter_query:
+            return
+
+        self._populate_tree(
+            self.projects,
+            filter_text=query,
+            filter_result=result,
+        )
+        search_input = self.query_one("#filter-input", Input)
+        if query:
+            if search_input.has_focus or self.current_meta is None:
+                self._show_search_summary(query, result.filtered_count)
+        elif self.current_meta:
+            self.request_preview(self.current_meta)
+
+    def _populate_tree(
+        self,
+        projects: list[Project],
+        filter_text: str = "",
+        *,
+        filter_result: _FilterResult | None = None,
+    ) -> None:
+        if filter_result is None:
+            filter_result = self._prepare_filter(projects, filter_text)
+        with self.batch_update():
+            self._render_tree(projects, filter_text, filter_result)
+
+    def _render_tree(
+        self,
+        projects: list[Project],
+        filter_text: str,
+        filter_result: _FilterResult,
+    ) -> None:
         self.projects = projects
         tree = self.query_one(Tree)
         tree.clear()
         tree.root.data = None
         terms = parse_search_terms(filter_text)
-        indexed_matches: dict[str, str] = {}
-        if terms:
-            try:
-                indexed_matches = self._conversation_index.search(filter_text)
-            except Exception:
-                indexed_matches = {}
+        indexed_matches = filter_result.indexed_matches
 
         summaries = self._summaries
 
@@ -682,25 +815,10 @@ History appears immediately. Full-text results arrive live while indexing runs i
 
         # Group: source → path_group → [(rel_label, proj, convos)]
         by_source: dict[str, dict[str, list[tuple[str, Project, list]]]] = {}
-        filtered_count = 0
+        filtered_count = filter_result.filtered_count
 
-        for proj in projects:
+        for proj in filter_result.projects:
             convos = proj.conversations
-            if terms:
-                matches = []
-                for c in convos:
-                    metadata = "\n".join(
-                        (
-                            c.slug or "",
-                            c.uuid,
-                            c.preview or "",
-                            summaries.get(c.uuid, ""),
-                            proj.display_path,
-                        )
-                    ).casefold()
-                    if c.uuid in indexed_matches or all(term in metadata for term in terms):
-                        matches.append(c)
-                convos = matches
             if not convos:
                 continue
 
@@ -709,7 +827,6 @@ History appears immediately. Full-text results arrive live while indexing runs i
             by_source.setdefault(source, {}).setdefault(gkey, []).append(
                 (rel_label, proj, convos)
             )
-            filtered_count += len(convos)
 
         self.query_one("#left-title", Static).update(
             f" {'RESULTS' if terms else 'HISTORY'} · {filtered_count}"
@@ -966,13 +1083,14 @@ History appears immediately. Full-text results arrive live while indexing runs i
         preview_scroll.loading = False
         preview_scroll.scroll_home()
 
-    def _show_search_summary(self, query: str) -> None:
-        result_nodes = [
-            node
-            for node in self._walk_tree_nodes()
-            if node.data and node.data.kind == "convo"
-        ]
-        count = len(result_nodes)
+    def _show_search_summary(self, query: str, count: int | None = None) -> None:
+        if count is None:
+            result_nodes = [
+                node
+                for node in self._walk_tree_nodes()
+                if node.data and node.data.kind == "convo"
+            ]
+            count = len(result_nodes)
         escaped_query = _escape_markdown_inline(query)
         if self._indexing:
             progress = self._index_progress
@@ -1007,12 +1125,8 @@ History appears immediately. Full-text results arrive live while indexing runs i
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "filter-input":
-            query = event.value.strip()
-            self._populate_tree(self.projects, filter_text=query)
-            if query:
-                self._show_search_summary(query)
-            elif self.current_meta:
-                self.request_preview(self.current_meta)
+            self._filter_query = event.value.strip()
+            self._schedule_filter()
 
     # --- Multi-select ---
 
