@@ -1,5 +1,7 @@
 # agentconvos
 
+[![CI](https://github.com/testy-cool/agentconvos/actions/workflows/ci.yml/badge.svg)](https://github.com/testy-cool/agentconvos/actions/workflows/ci.yml)
+
 Discover, query, and browse AI coding agent conversations. Works with Claude Code, Codex, Pi, Agy, OpenCode, and durable Clihow question threads.
 
 Use as a **CLI** (`agentconvos --context --json`), a **Python library** (`from agentconvos import scan_projects`), or an **interactive TUI** (`agentconvos`).
