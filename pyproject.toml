@@ -4,10 +4,37 @@ version = "0.1.0"
 description = "Discover, query, and browse AI coding agent conversations (Claude Code, Codex, Pi, Agy, OpenCode)"
 readme = "README.md"
 requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "testy-cool", email = "office@voidxd.ro" }]
+keywords = [
+    "claude-code",
+    "codex",
+    "conversation-history",
+    "cli",
+    "tui",
+    "llm",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Documentation",
+    "Topic :: Utilities",
+]
 dependencies = [
     "httpx>=0.28.1",
     "textual>=3.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/testy-cool/agentconvos"
+Repository = "https://github.com/testy-cool/agentconvos"
+Issues = "https://github.com/testy-cool/agentconvos/issues"
 
 [project.optional-dependencies]
 ai = ["google-genai>=1.0"]
