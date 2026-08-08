@@ -241,6 +241,17 @@ directory, full session ID, and command.
 | Summaries | `~/.claude/convo-explorer/summaries/` |
 | Analyses | `~/.claude/convo-explorer/analyses/` |
 
+## Development
+
+```bash
+git clone https://github.com/testy-cool/agentconvos.git
+cd agentconvos
+uv sync            # installs the package plus pytest and ruff
+uv run pytest      # full Python suite (~3 min, includes Textual timing tests)
+uv run ruff check  # lint
+cd tui && go test ./...   # Go picker suite
+```
+
 ## License
 
 MIT
