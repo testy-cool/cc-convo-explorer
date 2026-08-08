@@ -564,6 +564,19 @@ class TuiErgonomicsTests(unittest.IsolatedAsyncioTestCase):
                 populate_tree.assert_not_called()
                 show_summary.assert_not_called()
 
+    async def test_late_index_callbacks_after_shutdown_are_ignored(self):
+        """A slow index sync can finish after the app exits; its UI callbacks
+        must not crash on the already-removed status widgets."""
+        with patch("agentconvos.app.scan_projects", return_value=[]):
+            tui = app_module.ConvoExplorer()
+            async with tui.run_test(size=(100, 32)):
+                pass
+
+            stats = SimpleNamespace(total=5, checked=5, failed=0)
+            tui._set_index_progress(stats)
+            tui._index_finished(stats)
+            tui._index_failed("boom")
+
     async def test_broad_filter_is_bounded_and_applied_in_one_batch(self):
         class BroadIndex:
             def search(self, query):

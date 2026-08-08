@@ -13,6 +13,7 @@ from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.css.query import NoMatches
 from textual.screen import ModalScreen
 from textual.widgets import (
     Button,
@@ -627,8 +628,12 @@ History appears immediately. Full-text results arrive live while indexing runs i
         self._index_progress = progress
         label = Text("INDEXING ", style="bold #f0b35a")
         label.append(f"{progress.checked}/{progress.total}", style="#d8c39b")
-        self.query_one("#index-status", Static).update(label)
-        search_input = self.query_one("#filter-input", Input)
+        try:
+            status = self.query_one("#index-status", Static)
+            search_input = self.query_one("#filter-input", Input)
+        except NoMatches:  # index sync outlived the app; nothing to update
+            return
+        status.update(label)
         query = search_input.value.strip()
         if query and progress.checked:
             self._filter_query = query
@@ -641,8 +646,12 @@ History appears immediately. Full-text results arrive live while indexing runs i
         label.append(f"{progress.total}", style="#a7e8d2")
         if progress.failed:
             label.append(f" · {progress.failed} skipped", style="#f0b35a")
-        self.query_one("#index-status", Static).update(label)
-        search_input = self.query_one("#filter-input", Input)
+        try:
+            status = self.query_one("#index-status", Static)
+            search_input = self.query_one("#filter-input", Input)
+        except NoMatches:  # index sync outlived the app; nothing to update
+            return
+        status.update(label)
         query = search_input.value.strip()
         if query:
             self._filter_query = query
@@ -650,9 +659,11 @@ History appears immediately. Full-text results arrive live while indexing runs i
 
     def _index_failed(self, message: str) -> None:
         self._indexing = False
-        self.query_one("#index-status", Static).update(
-            Text("INDEX UNAVAILABLE", style="bold #ff7b72")
-        )
+        try:
+            status = self.query_one("#index-status", Static)
+        except NoMatches:  # index sync outlived the app; nothing to update
+            return
+        status.update(Text("INDEX UNAVAILABLE", style="bold #ff7b72"))
         self.notify(f"Search index failed: {message}", severity="warning")
 
     def _get_analyzed_set(self) -> set[str]:
