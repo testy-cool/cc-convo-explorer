@@ -9,9 +9,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from textual.widgets import Input, Static
+
 import agentconvos.app as app_module
 import agentconvos.parser as parser_module
-from textual.widgets import Input, Static
 from agentconvos.parser import ConversationMeta, Turn
 from agentconvos.scanner import Project
 

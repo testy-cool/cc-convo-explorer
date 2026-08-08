@@ -7,8 +7,8 @@ import os
 import re
 import shlex
 import sqlite3
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -119,12 +119,12 @@ def _detect_format(path: Path) -> str:
             return "agy"
 
         if path.suffix == ".json":
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 rec = json.load(f)
             if isinstance(rec, dict) and isinstance(rec.get("items"), list):
                 return "codex_json"
 
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             first_line = f.readline()
             if not first_line.strip():
                 first_line = f.readline()
@@ -183,7 +183,7 @@ def get_meta(path: Path) -> ConversationMeta | None:
 def _get_meta_claude(path: Path) -> ConversationMeta | None:
     """Extract metadata from a Claude Code .jsonl."""
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             for line in f:
                 rec = json.loads(line)
                 if rec.get("type") != "user":
@@ -209,7 +209,7 @@ def _get_meta_claude(path: Path) -> ConversationMeta | None:
 def _get_meta_clihow(path: Path) -> ConversationMeta | None:
     """Extract metadata from a clihow durable ask-thread JSONL."""
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             first_line = f.readline()
             if not first_line.strip():
                 return None
@@ -269,7 +269,7 @@ def _codex_thread_names() -> dict[str, str]:
     names: dict[str, str] = {}
     index_path = _codex_home() / "session_index.jsonl"
     try:
-        with open(index_path, "r", encoding="utf-8") as f:
+        with open(index_path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -291,7 +291,7 @@ def _codex_thread_names() -> dict[str, str]:
 def _unix_to_iso(value) -> str:
     if not isinstance(value, (int, float)):
         return ""
-    return datetime.fromtimestamp(value, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+    return datetime.fromtimestamp(value, tz=UTC).isoformat().replace("+00:00", "Z")
 
 
 def _codex_timestamp_from_rollout_stem(stem: str) -> str:
@@ -375,7 +375,7 @@ def _get_meta_codex(path: Path) -> ConversationMeta | None:
         preview = ""
         preview_source = ""
         agent_path = ""
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             line_count = 0
             for line in f:
                 line_count += 1
@@ -449,7 +449,7 @@ def _get_meta_codex(path: Path) -> ConversationMeta | None:
 def _get_meta_codex_json(path: Path) -> ConversationMeta | None:
     """Extract metadata from legacy Codex JSON conversation files."""
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             rec = json.load(f)
         session_id = rec.get("id", path.stem)
         timestamp = _unix_to_iso(rec.get("created_at")) or _unix_to_iso(rec.get("updated_at")) or ""
@@ -484,7 +484,7 @@ def _get_meta_pi(path: Path) -> ConversationMeta | None:
         timestamp = ""
         cwd = ""
         preview = ""
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -540,7 +540,7 @@ def _agy_history_records(conversation_id: str | None = None) -> list[dict]:
     history_path = _agy_home() / "history.jsonl"
     records: list[dict] = []
     try:
-        with open(history_path, "r", encoding="utf-8") as f:
+        with open(history_path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -561,7 +561,7 @@ def _agy_history_records(conversation_id: str | None = None) -> list[dict]:
 def _ms_to_iso(value) -> str:
     if not isinstance(value, (int, float)):
         return ""
-    return datetime.fromtimestamp(value / 1000, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+    return datetime.fromtimestamp(value / 1000, tz=UTC).isoformat().replace("+00:00", "Z")
 
 
 def _opencode_rows(database_path: Path, session_id: str | None = None) -> list[tuple]:
@@ -676,7 +676,7 @@ def _get_meta_agy(path: Path) -> ConversationMeta | None:
     timestamp = _ms_to_iso(first.get("timestamp"))
     if not timestamp:
         try:
-            timestamp = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+            timestamp = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC).isoformat().replace("+00:00", "Z")
         except OSError:
             timestamp = ""
 
@@ -783,7 +783,7 @@ def _parse_jsonl_clihow(path: Path) -> list[Turn]:
     """Parse clihow's metadata-plus-message JSONL into normalized turns."""
     turns: list[Turn] = []
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             for line in f:
                 try:
                     record = json.loads(line)
@@ -813,7 +813,7 @@ def _parse_jsonl_claude(path: Path, detail: str = DETAIL_TEXT) -> list[Turn]:
     # Pass 2: build turns, attaching results to their tool calls.
     tool_results: dict[str, str] = {}
     if include_results:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -835,7 +835,7 @@ def _parse_jsonl_claude(path: Path, detail: str = DETAIL_TEXT) -> list[Turn]:
 
     # Pass 2: build turns
     turns: list[Turn] = []
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -941,7 +941,7 @@ def _summarize_codex_tool(name: str, arguments: str) -> str:
 
 def _iter_jsonl_records(path: Path):
     """Yield valid JSON records without retaining the full transcript."""
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -1069,7 +1069,7 @@ def _parse_jsonl_codex_json(path: Path, detail: str = DETAIL_TEXT) -> list[Turn]
     include_results = detail in (DETAIL_RESULTS, DETAIL_FULL)
     truncate_results = detail == DETAIL_RESULTS
 
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         rec = json.load(f)
     items = rec.get("items", [])
     if not isinstance(items, list):
@@ -1151,7 +1151,7 @@ def _parse_jsonl_pi(path: Path, detail: str = DETAIL_TEXT) -> list[Turn]:
     truncate_results = detail == DETAIL_RESULTS
 
     records = []
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -1609,7 +1609,7 @@ def get_stats(path: Path) -> ConversationStats:
 def _get_stats_claude(path: Path) -> ConversationStats:
     """Extract stats from Claude Code format."""
     stats = ConversationStats()
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -1651,7 +1651,7 @@ def _get_stats_claude(path: Path) -> ConversationStats:
 def _get_stats_codex(path: Path) -> ConversationStats:
     """Extract stats from Codex format."""
     stats = ConversationStats()
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -1700,7 +1700,7 @@ def _get_stats_codex(path: Path) -> ConversationStats:
 def _get_stats_codex_json(path: Path) -> ConversationStats:
     """Extract stats from legacy Codex JSON format."""
     stats = ConversationStats()
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         rec = json.load(f)
     stats.model = rec.get("model", "")
     stats.effort = str(rec.get("effort") or rec.get("reasoning_effort") or "")
@@ -1720,7 +1720,7 @@ def _get_stats_codex_json(path: Path) -> ConversationStats:
 def _get_stats_pi(path: Path) -> ConversationStats:
     """Extract stats from Pi format."""
     stats = ConversationStats()
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:

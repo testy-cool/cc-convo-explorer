@@ -18,8 +18,10 @@ from .parser import (
     get_meta,
     get_stats,
     parse_jsonl,
-    search_conversations as search,
     to_markdown,
+)
+from .parser import (
+    search_conversations as search,
 )
 from .scanner import Project, scan_projects
 

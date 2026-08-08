@@ -9,13 +9,11 @@ from datetime import datetime
 from pathlib import Path
 
 from rich.text import Text
-
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.worker import get_current_worker
 from textual.widgets import (
     Button,
     Footer,
@@ -27,10 +25,20 @@ from textual.widgets import (
     Tree,
 )
 from textual.widgets.tree import TreeNode
+from textual.worker import get_current_worker
 
+from .analyzer import DEFAULT_MODEL, MODELS, MULTI_PROMPT, SINGLE_PROMPT
+from .parser import (
+    DETAIL_TEXT,
+    ConversationMeta,
+    conversation_signature,
+    get_stats,
+    parse_jsonl,
+    parse_search_terms,
+    to_markdown,
+)
 from .scanner import Project, scan_projects
 from .search_index import ConversationSearchIndex, IndexSyncStats
-
 
 _SOURCE_STYLE = {
     "claude": ("Claude Code", "bold #cc5500"),
@@ -143,19 +151,6 @@ def _export_stem(meta: ConversationMeta) -> str:
     proj = Path(meta.cwd).name if meta.cwd else ""
     short_id = meta.uuid[:8]
     return f"{proj}-{short_id}" if proj else short_id
-from .parser import (
-    ConversationMeta,
-    DETAIL_FULL,
-    DETAIL_RESULTS,
-    DETAIL_TEXT,
-    DETAIL_TOOLS,
-    conversation_signature,
-    get_stats,
-    parse_jsonl,
-    parse_search_terms,
-    to_markdown,
-)
-from .analyzer import MODELS, DEFAULT_MODEL, SINGLE_PROMPT, MULTI_PROMPT
 
 
 def _conversation_size(path: Path) -> int:
@@ -1988,6 +1983,7 @@ def main() -> None:
 
     if args.turns:
         import json as _json
+
         from .parser import get_meta
 
         paths = _resolve_args([args.turns], extra_dirs=_extra_dirs)
@@ -2057,6 +2053,7 @@ def main() -> None:
 
     if args.search:
         import sys as _sys
+
         from .scanner import scan_projects
         projects = scan_projects(**_scan_kwargs)
         all_conversations = [c for p in projects for c in p.conversations]
@@ -2131,9 +2128,10 @@ def main() -> None:
         return
 
     if args.last is not None or args.context:
+        import json as _json
+
         from .scanner import scan_projects
         from .summarize import load_summaries
-        import json as _json
 
         projects = scan_projects(**_scan_kwargs)
         summaries = load_summaries()
@@ -2425,8 +2423,8 @@ def main() -> None:
         return
 
     if args.export_all:
-        from .scanner import scan_projects
         from .parser import get_meta
+        from .scanner import scan_projects
         out_dir = Path(args.export_all)
         out_dir.mkdir(parents=True, exist_ok=True)
         projects = scan_projects(**_scan_kwargs)
@@ -2476,7 +2474,14 @@ def main() -> None:
         return
 
     if args.analyze or args.deep:
-        from .analyzer import gemini_available, analyze_single, analyze_multi, analyze_deep, SINGLE_PROMPT, MULTI_PROMPT
+        from .analyzer import (
+            MULTI_PROMPT,
+            SINGLE_PROMPT,
+            analyze_deep,
+            analyze_multi,
+            analyze_single,
+            gemini_available,
+        )
         if not gemini_available():
             print("Error: set GEMINI_API_KEY env var")
             return
@@ -2530,13 +2535,13 @@ def main() -> None:
         return
 
     if args.summarize:
-        from .summarize import summarize_all, _load_api_key
         from .scanner import scan_projects
+        from .summarize import _load_api_key, summarize_all
         try:
             api_key = _load_api_key()
         except RuntimeError as e:
             print(f"Error: {e}")
-            raise SystemExit(1)
+            raise SystemExit(1) from e
         projects = scan_projects(**_scan_kwargs)
 
         import sys

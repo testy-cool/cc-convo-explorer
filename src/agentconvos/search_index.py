@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Callable, Iterable
 
 from .parser import (
     ConversationMeta,
@@ -17,7 +17,6 @@ from .parser import (
     parse_jsonl,
     parse_search_terms,
 )
-
 
 DEFAULT_INDEX_PATH = Path.home() / ".claude" / "convo-explorer" / "search-index.sqlite3"
 

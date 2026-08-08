@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
-from datetime import datetime, timezone
 
-from .parser import ConversationMeta, conversation_signature, parse_jsonl, DETAIL_TEXT
+from .parser import DETAIL_TEXT, ConversationMeta, conversation_signature, parse_jsonl
 
 SUMMARIES_DIR = Path.home() / ".claude" / "convo-explorer" / "summaries"
 BIFROST_URL = "https://bifrost.voidxd.cloud/v1/chat/completions"
@@ -62,7 +62,7 @@ def _write_cache(uuid: str, summary: str) -> None:
         "summary": summary,
         "model": MODEL,
         "summary_version": SUMMARY_VERSION,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
     }
     (SUMMARIES_DIR / f"{uuid}.json").write_text(json.dumps(data, indent=2))
 
@@ -83,8 +83,9 @@ def _call_bifrost(
     *,
     max_tokens: int,
 ) -> str:
-    import httpx
     import time
+
+    import httpx
     for attempt in range(3):
         resp = httpx.post(
             BIFROST_URL,

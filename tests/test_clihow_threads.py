@@ -1,7 +1,7 @@
 import contextlib
 import inspect
-import json
 import io
+import json
 import os
 import sys
 import tempfile
@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import agentconvos.app as app_module
+from agentconvos import scanner
 from agentconvos.app import (
     _RESUMABLE_SOURCES,
     _SOURCE_ORDER,
@@ -19,8 +20,6 @@ from agentconvos.app import (
     main,
 )
 from agentconvos.parser import ConversationMeta, _detect_format, get_meta, parse_jsonl
-from agentconvos import scanner
-
 
 THREAD_ID = "019f0000-0000-7000-8000-000000000001"
 

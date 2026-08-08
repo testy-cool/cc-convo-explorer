@@ -1,7 +1,7 @@
 import contextlib
+import inspect
 import io
 import json
-import inspect
 import os
 import sqlite3
 import sys
@@ -13,7 +13,14 @@ from unittest.mock import patch
 import agentconvos.parser as parser_module
 import agentconvos.scanner as scanner_module
 from agentconvos.app import _handoff_agent, _handoff_cmd, _resume_cmd, main
-from agentconvos.parser import ConversationMeta, ConversationStats, SearchHit, Turn, get_meta, parse_jsonl
+from agentconvos.parser import (
+    ConversationMeta,
+    ConversationStats,
+    SearchHit,
+    Turn,
+    get_meta,
+    parse_jsonl,
+)
 from agentconvos.scanner import Project, scan_projects
 
 
@@ -52,7 +59,7 @@ def _write_agy_db(path: Path, assistant_text: str = "I can help with that.") -> 
         )
         conn.execute(
             "INSERT INTO steps (idx, step_type, status, step_payload) VALUES (?, ?, ?, ?)",
-            (0, 15, 5, f"\n^{assistant_text}2(bot-test".encode("utf-8")),
+            (0, 15, 5, f"\n^{assistant_text}2(bot-test".encode()),
         )
         conn.commit()
     finally:

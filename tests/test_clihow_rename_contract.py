@@ -5,10 +5,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from agentconvos import scanner
 from agentconvos.app import _resume_cmd
 from agentconvos.parser import _detect_format, get_meta
-from agentconvos import scanner
-
 
 THREAD_ID = "019f0000-0000-7000-8000-000000000001"
 

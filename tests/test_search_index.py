@@ -1,6 +1,6 @@
+import sqlite3
 import tempfile
 import unittest
-import sqlite3
 from pathlib import Path
 
 from agentconvos.parser import ConversationMeta, Turn, conversation_signature

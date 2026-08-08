@@ -10,8 +10,9 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, TextIO
+from typing import TextIO
 
 from rich import box
 from rich.console import Console, Group, RenderableType
@@ -19,7 +20,6 @@ from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
-
 
 _AGY_BRIDGE = "/home/testycool/Work/try-rs/agy-bridge/agy-bridge"
 _RECALL_MODEL = "gpt-5.6-luna"

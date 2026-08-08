@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from agentconvos.parser import ConversationMeta, DETAIL_TEXT, Turn
+from agentconvos.parser import DETAIL_TEXT, ConversationMeta, Turn
 from agentconvos.summarize import _needs_summary, summarize_session
 
 
