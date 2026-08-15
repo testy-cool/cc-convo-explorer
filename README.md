@@ -280,22 +280,14 @@ Press `?` for the full key list. The headline keys:
 git clone https://github.com/testy-cool/agentconvos.git
 cd agentconvos
 uv sync            # installs the package plus pytest and ruff
-uv run pytest      # full Python suite (~3 min, includes Textual timing tests)
+uv run pytest      # full Python suite
 uv run ruff check  # lint
 cd tui && go test ./...   # Go picker suite
 ```
 
-Every README image is a real capture of the program running against a synthetic
-archive, so no private conversation appears in any of them. Rebuild them all with:
-
-```bash
-./scripts/make_readme_images.sh
-```
-
-It needs [termshot](https://github.com/homeport/termshot) and tmux on your PATH.
-The command line images come from termshot. The browser image comes from Textual's
-own SVG export, because a full screen app redraws over itself and termshot would
-capture the whole session instead of the final screen.
+Every image in this README is a real capture of the program running against a
+synthetic archive built by `scripts/`, so no private conversation appears in any
+of them.
 
 ## License
 
