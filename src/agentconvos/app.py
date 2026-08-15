@@ -32,6 +32,7 @@ from .analyzer import DEFAULT_MODEL, MODELS, MULTI_PROMPT, SINGLE_PROMPT
 from .parser import (
     DETAIL_TEXT,
     ConversationMeta,
+    ConversationStats,
     conversation_signature,
     get_stats,
     parse_jsonl,
@@ -123,6 +124,23 @@ def _fmt_ts(ts: str, date_only: bool = False) -> str:
     if date_only or len(ts) < 16:
         return ts[:10]
     return ts[:16].replace("T", " ")
+
+
+def _stats_line(path: Path) -> str:
+    """Model and token cost for the preview header, empty when unavailable."""
+    try:
+        stats: ConversationStats = get_stats(path)
+    except (OSError, ValueError):
+        return ""
+    parts = []
+    if stats.model:
+        parts.append(f"**Model:** {stats.model}")
+    total_tokens = stats.input_tokens + stats.output_tokens
+    if total_tokens:
+        parts.append(f"**Tokens:** {total_tokens:,}")
+    if stats.tool_calls:
+        parts.append(f"**Tool calls:** {stats.tool_calls:,}")
+    return "  \n" + " · ".join(parts) if parts else ""
 
 
 def _elide(text: str, width: int) -> str:
@@ -368,6 +386,7 @@ class HelpScreen(ModalScreen[None]):
         ("s", "Select / deselect for bulk actions"),
         ("Ctrl+A", "Select all"),
         ("Ctrl+D", "Deselect all"),
+        ("y", "Copy the session ID"),
         ("o", "Open the conversation's folder"),
         ("Esc", "Clear the search, cancel"),
         ("q", "Quit"),
@@ -537,6 +556,7 @@ class ConvoExplorer(App):
         Binding("tab", "toggle_focus", "Switch panel", priority=True),
         Binding("q", "quit", "Quit", priority=False),
         Binding("question_mark", "help", "Help", priority=False),
+        Binding("y", "copy_id", "Copy session ID", show=False),
         Binding("c", "export_concat", "Export combined", show=False),
         Binding("ctrl+a", "select_all", "Select all", show=False),
         Binding("ctrl+d", "deselect_all", "Deselect all", show=False),
@@ -1094,6 +1114,26 @@ History appears immediately. Full-text results arrive live while indexing runs i
             self.current_meta = data.meta
             query = self.query_one("#filter-input", Input).value.strip()
             self.request_preview(data.meta, query)
+        elif data.kind == "project" and data.project:
+            self._show_project_digest(data.project)
+
+    def _show_project_digest(self, project: Project) -> None:
+        """Summarize a project so its row does not leave a stale transcript up."""
+        convos = project.conversations
+        lines = [
+            f"## {_short_path(project.display_path)}",
+            f"**{len(convos)} conversations**",
+            "",
+            "---",
+            "",
+        ]
+        summaries = self._summaries
+        for meta in convos[:12]:
+            title = summaries.get(meta.uuid) or meta.preview or meta.slug or meta.uuid[:8]
+            lines.append(f"- `{_fmt_ts(meta.timestamp)}` {_escape_markdown_inline(title[:110])}")
+        if len(convos) > 12:
+            lines.append(f"\n*and {len(convos) - 12} more.*")
+        self._set_preview("\n".join(lines), 0, f"PROJECT · {len(convos)} conversations")
 
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
         """Preview a conversation as soon as the cursor lands on it."""
@@ -1188,9 +1228,13 @@ History appears immediately. Full-text results arrive live while indexing runs i
         skipped = len(turns) - len(tail)
         title = _highlight_markdown(meta.slug or meta.uuid, terms)
         cwd = _highlight_markdown(_short_path(meta.cwd) if meta.cwd else "(unknown)", terms)
-        header = f"## {title}\n**Date:** {_fmt_ts(meta.timestamp)}  \n**CWD:** {cwd}  \n**Session ID:** `{meta.uuid}`  \n**Turns:** {len(turns)} total"
+        header = f"## {title}\n**Date:** {_fmt_ts(meta.timestamp)}  \n**CWD:** {cwd}  "
+        if meta.git_branch:
+            header += f"\n**Branch:** {_highlight_markdown(meta.git_branch, terms)}  "
+        header += f"\n**Session ID:** `{meta.uuid}`  \n**Turns:** {len(turns)} total"
         if skipped:
             header += f" (showing last {len(tail)} of {len(turns)} · press v for all)"
+        header += _stats_line(meta.path)
         header += "\n\n---\n\n"
         if not worker.is_cancelled:
             self.call_from_thread(
@@ -1705,6 +1749,14 @@ History appears immediately. Full-text results arrive live while indexing runs i
             self.notify("Pick a conversation first", severity="warning")
             return
         self.request_preview(self.current_meta, full=True)
+
+    def action_copy_id(self) -> None:
+        """Put the session ID on the clipboard for a resume command."""
+        if not self.current_meta:
+            self.notify("Pick a conversation first", severity="warning")
+            return
+        self.copy_to_clipboard(self.current_meta.uuid)
+        self.notify(f"Copied {self.current_meta.uuid}")
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id != "filter-input":

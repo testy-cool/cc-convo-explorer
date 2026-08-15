@@ -685,6 +685,103 @@ class TuiErgonomicsTests(unittest.IsolatedAsyncioTestCase):
         self.assertLessEqual(len(label), sidebar_width)
         self.assertTrue(label.rstrip().endswith("…"), f"row was not elided: {label!r}")
 
+    async def test_preview_header_shows_branch_model_and_size(self):
+        """Deciding whether to resume a session needs more than a date; the
+        branch, model and token cost belong in the header."""
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp)
+            meta = _meta(cwd / "s.jsonl", "stats-session", "2026-08-10T09:05:00", cwd)
+            meta.git_branch = "fix/jwt-refresh"
+            stats = app_module.ConversationStats(
+                model="claude-opus-4-6",
+                input_tokens=41200,
+                output_tokens=1850,
+            )
+            captured: list[str] = []
+
+            with patch("agentconvos.app.scan_projects", return_value=[]):
+                tui = app_module.ConvoExplorer()
+                async with tui.run_test(size=(120, 36)) as pilot:
+                    with (
+                        patch("agentconvos.app.parse_jsonl", return_value=[Turn("user", "hi")]),
+                        patch("agentconvos.app.get_stats", return_value=stats),
+                        patch.object(
+                            tui, "_set_preview",
+                            side_effect=lambda md, *a, **k: captured.append(md),
+                        ),
+                    ):
+                        tui.request_preview(meta)
+                        for _ in range(60):
+                            await pilot.pause(0.05)
+                            if captured:
+                                break
+
+        self.assertTrue(captured, "preview was never rendered")
+        header = captured[0]
+        self.assertIn("2026-08-10 09:05", header)
+        self.assertIn("fix/jwt-refresh", header)
+        self.assertIn("claude-opus-4-6", header)
+        self.assertIn("43,050", header)
+
+    async def test_session_id_can_be_copied_with_one_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp)
+            meta = _meta(cwd / "s.jsonl", "copy-session-uuid", "2026-08-10T09:00:00", cwd)
+
+            with patch("agentconvos.app.scan_projects", return_value=[]):
+                tui = app_module.ConvoExplorer()
+                async with tui.run_test(size=(110, 36)) as pilot:
+                    tui.current_meta = meta
+                    with patch.object(tui, "copy_to_clipboard") as copy:
+                        tui.action_copy_id()
+                        await pilot.pause(0.05)
+
+        copy.assert_called_once_with("copy-session-uuid")
+
+    async def test_project_row_previews_the_project_instead_of_going_stale(self):
+        """Landing on a project should say what is in it, not leave whatever
+        conversation was previewed last on screen."""
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp)
+            metas = [
+                _meta(cwd / "a.jsonl", "recent-session", "2026-08-10T09:00:00", cwd),
+                _meta(cwd / "b.jsonl", "older-session", "2026-06-02T09:00:00", cwd),
+            ]
+            project = Project("tmp", str(cwd), metas)
+            captured: list[str] = []
+
+            with patch("agentconvos.app.scan_projects", return_value=[project]):
+                tui = app_module.ConvoExplorer()
+                async with tui.run_test(size=(120, 36)) as pilot:
+                    tree = tui.query_one("#nav-tree", Tree)
+                    for _ in range(60):
+                        await pilot.pause(0.05)
+                        if tree.root.children:
+                            break
+                    tree.root.expand_all()
+                    await pilot.pause(0.1)
+
+                    node = next(
+                        node
+                        for node in tui._walk_tree_nodes()
+                        if node.data and node.data.kind == "project"
+                    )
+                    with patch.object(
+                        tui, "_set_preview",
+                        side_effect=lambda md, *a, **k: captured.append(md),
+                    ):
+                        tree.select_node(node)
+                        tree.action_select_cursor()
+                        for _ in range(40):
+                            await pilot.pause(0.05)
+                            if captured:
+                                break
+
+        self.assertTrue(captured, "project row rendered no preview")
+        digest = captured[-1]
+        self.assertIn("2 conversations", digest)
+        self.assertIn("2026-08-10", digest)
+
     def test_footer_leads_with_the_flagship_actions(self):
         """Resume, handoff and search must be visible in the footer instead of
         being crowded out by bulk-action keys; the rest lives behind ?."""
