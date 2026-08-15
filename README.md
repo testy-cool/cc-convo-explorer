@@ -6,7 +6,11 @@ Discover, query, and browse AI coding agent conversations. Works with Claude Cod
 
 Use as a **CLI** (`agentconvos --context --json`), a **Python library** (`from agentconvos import scan_projects`), or an **interactive TUI** (`agentconvos`).
 
-<img src="assets/demo.png" alt="agentconvos --context showing recent Claude Code and Codex sessions for a project">
+<img src="assets/demo-tui.svg" alt="The agentconvos browser with a search running, matching conversations in the tree on the left and the selected transcript previewed on the right">
+
+Ask the archive a question in plain language and get an answer with citations:
+
+<img src="assets/demo-recall.png" alt="agentconvos recall answering where a decision was made, with a live progress panel and an answer citing the agent, date, session and turns">
 
 ## Install
 
@@ -33,6 +37,8 @@ agentconvos --last 3            # last 3
 agentconvos --context           # last 5 per agent, with fast catch-up details
 agentconvos --context --json    # structured full messages for piping to agents
 ```
+
+<img src="assets/demo.png" alt="agentconvos --context showing recent Claude Code and Codex sessions for a project">
 
 `--context` is the quick answer to “what was last discussed in this folder?” For
 each coding-agent source it shows up to five recent conversations with their date,
@@ -210,8 +216,6 @@ stats = get_stats(projects[0].conversations[0].path)
 ```bash
 agentconvos
 ```
-
-<img src="assets/demo-tui.svg" alt="The agentconvos browser with a search running, matching conversations in the tree on the left and the selected transcript previewed on the right">
 
 Interactive tree grouped by agent/source (Claude Code, Codex, Pi, Agy, OpenCode,
 Clihow) with search, multi-select, preview, export, and Gemini analysis. The

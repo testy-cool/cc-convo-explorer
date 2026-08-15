@@ -28,7 +28,7 @@ from agentconvos.app import ConvoExplorer  # noqa: E402
 
 async def main():
     app = ConvoExplorer()
-    async with app.run_test(size=(118, 32)) as pilot:
+    async with app.run_test(size=(124, 44)) as pilot:
         tree = app.query_one("#nav-tree", Tree)
 
         # Wait for the scan to put conversations in the tree.
