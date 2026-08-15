@@ -329,6 +329,53 @@ class ResumeScreen(ModalScreen[bool]):
         self.dismiss(False)
 
 
+class HelpScreen(ModalScreen[None]):
+    """Every key in one place; the footer only shows the headliners."""
+
+    CSS = """
+    HelpScreen { align: center middle; }
+    #help-dialog { width: 64; height: auto; max-height: 90%; border: thick $accent; background: $surface; padding: 1 2; }
+    #help-title { text-style: bold; margin-bottom: 1; }
+    #help-hint { color: $text-muted; margin-top: 1; }
+    """
+
+    BINDINGS = [
+        Binding("escape", "dismiss_help", "Close", priority=True),
+        Binding("q", "dismiss_help", "Close"),
+        Binding("question_mark", "dismiss_help", "Close"),
+    ]
+
+    KEYS: list[tuple[str, str]] = [
+        ("/", "Search; ↑ ↓ walk the results while typing"),
+        ("Enter", "Open the highlighted conversation"),
+        ("Tab", "Switch panel"),
+        ("r", "Resume the session in its agent"),
+        ("h", "Handoff into a new session"),
+        ("e", "Export markdown"),
+        ("c", "Export selected as one file"),
+        ("a", "Analyze with Gemini"),
+        ("m", "Cycle the Gemini model"),
+        ("p", "Edit the analysis prompt"),
+        ("s", "Select / deselect for bulk actions"),
+        ("Ctrl+A", "Select all"),
+        ("Ctrl+D", "Deselect all"),
+        ("o", "Open the conversation's folder"),
+        ("Esc", "Clear the search, cancel"),
+        ("q", "Quit"),
+        ("?", "This help"),
+    ]
+
+    def compose(self) -> ComposeResult:
+        rows = "\n".join(f"  {key:<8} {what}" for key, what in self.KEYS)
+        with Vertical(id="help-dialog"):
+            yield Static("Keys", id="help-title")
+            yield Static(rows, id="help-body", markup=False)
+            yield Static("Esc closes", id="help-hint")
+
+    def action_dismiss_help(self) -> None:
+        self.dismiss(None)
+
+
 ANALYSES_DIR = Path(os.environ.get("USERPROFILE", Path.home())) / ".claude" / "convo-explorer" / "analyses"
 
 
@@ -468,22 +515,25 @@ class ConvoExplorer(App):
     #prompt-bar Button { width: 1fr; margin: 0 1; }
     """
 
+    # Footer space is scarce; it shows these in order until it runs out.
+    # The flagship actions come first, the bulk keys live behind "?".
     BINDINGS = [
-        Binding("q", "quit", "Quit", priority=False),
-        Binding("e", "export", "Export MD", priority=False),
-        Binding("c", "export_concat", "Export combined", priority=False),
-        Binding("a", "analyze", "Analyze (Gemini)", priority=False),
+        Binding("slash", "search", "Search", priority=False),
+        Binding("r", "resume", "Resume", priority=False),
+        Binding("h", "handoff", "Handoff", priority=False),
+        Binding("e", "export", "Export", priority=False),
+        Binding("a", "analyze", "Analyze", priority=False),
         Binding("s", "toggle_select", "Select", priority=False),
         Binding("tab", "toggle_focus", "Switch panel", priority=True),
-        Binding("ctrl+a", "select_all", "Select all", priority=False),
-        Binding("ctrl+d", "deselect_all", "Deselect all", priority=False),
-        Binding("m", "cycle_model", "Model", priority=False),
-        Binding("p", "edit_prompt", "Edit prompt", priority=False),
-        Binding("o", "open_folder", "Open folder", priority=False),
-        Binding("escape", "cancel", "Cancel", priority=False),
-        Binding("slash", "search", "Search", priority=False),
-        Binding("r", "resume", "Resume session", priority=False),
-        Binding("h", "handoff", "Handoff to new session", priority=False),
+        Binding("q", "quit", "Quit", priority=False),
+        Binding("question_mark", "help", "Help", priority=False),
+        Binding("c", "export_concat", "Export combined", show=False),
+        Binding("ctrl+a", "select_all", "Select all", show=False),
+        Binding("ctrl+d", "deselect_all", "Deselect all", show=False),
+        Binding("m", "cycle_model", "Model", show=False),
+        Binding("p", "edit_prompt", "Edit prompt", show=False),
+        Binding("o", "open_folder", "Open folder", show=False),
+        Binding("escape", "cancel", "Cancel", show=False),
     ]
 
     TITLE = "agentconvos"
@@ -1621,6 +1671,9 @@ History appears immediately. Full-text results arrive live while indexing runs i
     def action_search(self) -> None:
         filt = self.query_one("#filter-input", Input)
         filt.focus()
+
+    def action_help(self) -> None:
+        self.push_screen(HelpScreen())
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id != "filter-input":

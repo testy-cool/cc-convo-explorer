@@ -613,6 +613,37 @@ class TuiErgonomicsTests(unittest.IsolatedAsyncioTestCase):
             tui._index_finished(stats)
             tui._index_failed("boom")
 
+    def test_footer_leads_with_the_flagship_actions(self):
+        """Resume, handoff and search must be visible in the footer instead of
+        being crowded out by bulk-action keys; the rest lives behind ?."""
+        shown = [
+            binding.key
+            for binding in app_module.ConvoExplorer.BINDINGS
+            if getattr(binding, "show", True)
+        ]
+        self.assertEqual(shown[:6], ["slash", "r", "h", "e", "a", "s"])
+        self.assertIn("question_mark", shown)
+
+    async def test_help_overlay_opens_from_the_tree_but_not_the_search_box(self):
+        with patch("agentconvos.app.scan_projects", return_value=[]):
+            tui = app_module.ConvoExplorer()
+            async with tui.run_test(size=(110, 36)) as pilot:
+                await pilot.pause(0.1)
+
+                # In the search box, "?" is a character, not a shortcut.
+                await pilot.press("question_mark")
+                self.assertEqual(tui.query_one("#filter-input", Input).value, "?")
+
+                tui.query_one("#filter-input", Input).value = ""
+                await pilot.press("tab")
+                await pilot.press("question_mark")
+                await pilot.pause(0.05)
+                self.assertIsInstance(tui.screen, app_module.HelpScreen)
+
+                await pilot.press("escape")
+                await pilot.pause(0.05)
+                self.assertNotIsInstance(tui.screen, app_module.HelpScreen)
+
     async def test_arrow_keys_walk_results_from_the_search_box(self):
         """↑/↓ must move the result cursor and preview it while the search box
         keeps focus, and Enter must open the highlighted conversation."""
