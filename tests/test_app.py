@@ -1718,6 +1718,47 @@ class ContextCliTests(unittest.TestCase):
         self.assertIn("You:     Latest user follow-up", output)
         self.assertIn("Agent:   Latest agent response", output)
 
+    def test_last_reports_file_size_not_a_token_count(self):
+        """The listing derived a token count from the raw file, which includes
+        the tool traffic a normal read strips. It read ~200K for a session that
+        is about 1K tokens to actually read, so it deterred reading it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "codex.jsonl"
+            path.write_text("x" * 800_000, encoding="utf-8")
+            meta = ConversationMeta(
+                path=path,
+                uuid="sizing-session",
+                slug="sizing",
+                timestamp="2026-08-03T10:00:00Z",
+                cwd=str(root),
+                preview="First request",
+                source="codex",
+            )
+
+            old_argv = sys.argv
+            old_cwd = Path.cwd()
+            sys.argv = ["agentconvos", "--last", "1"]
+            stream = io.StringIO()
+            try:
+                os.chdir(root)
+                with (
+                    patch(
+                        "agentconvos.scanner.scan_projects",
+                        return_value=[Project("sizing", str(root), [meta])],
+                    ),
+                    patch("agentconvos.summarize.load_summaries", return_value={}),
+                    contextlib.redirect_stdout(stream),
+                ):
+                    main()
+            finally:
+                os.chdir(old_cwd)
+                sys.argv = old_argv
+
+        output = stream.getvalue()
+        self.assertNotIn("tok", output)
+        self.assertIn("800KB", output)
+
     def test_context_wraps_long_messages_under_their_label(self):
         """A long message wrapped by the terminal restarts at column zero and
         breaks the label columns, so it is wrapped with a hanging indent."""

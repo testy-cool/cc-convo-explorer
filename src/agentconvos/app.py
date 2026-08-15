@@ -121,6 +121,19 @@ def _short_path(path: str) -> str:
     return path
 
 
+def _file_size_label(size_bytes: int) -> str:
+    """Transcript size on disk. Deliberately not a token count: the raw file
+    holds tool traffic that a normal read strips, so tokens read one to two
+    orders of magnitude high and talk people out of readable conversations."""
+    if size_bytes >= 1_000_000_000:
+        return f"{size_bytes / 1_000_000_000:.1f}GB"
+    if size_bytes >= 1_000_000:
+        return f"{size_bytes / 1_000_000:.1f}MB"
+    if size_bytes >= 1000:
+        return f"{size_bytes // 1000}KB"
+    return f"{size_bytes}B"
+
+
 def _fmt_ts(ts: str, date_only: bool = False) -> str:
     """Format ISO timestamp: '2026-05-17 14:30' or '2026-05-17'."""
     if not ts:
@@ -1927,18 +1940,11 @@ def _pick_conversation(convos: list, cwd: str):
         name = c.slug or c.uuid[:8]
         summary = summaries.get(c.uuid, "")
         preview = summary[:60] if summary else (c.preview or "")[:50]
-        size = _conversation_size(c.path)
-        tokens = size // 4
-        if tokens >= 1_000_000:
-            tok_str = f"{tokens / 1_000_000:.1f}M"
-        elif tokens >= 1000:
-            tok_str = f"{tokens // 1000}K"
-        else:
-            tok_str = str(tokens)
+        size_str = _file_size_label(_conversation_size(c.path))
         marker = " *" if i == 0 else ""
         src_tag = f"[{c.source}]" if c.source != "claude" else ""
         src_pad = f" {src_tag:7s}" if src_tag else "        "
-        print(f"  [{i + 1}] {ts}{src_pad}  {name:30s}  ~{tok_str:>6s} tok  {preview}{marker}")
+        print(f"  [{i + 1}] {ts}{src_pad}  {name:30s}  {size_str:>7s}  {preview}{marker}")
     print(f"\nEnter number [1-{len(convos)}] or press Enter for latest: ", end="", flush=True)
     try:
         choice = input().strip()
@@ -2600,9 +2606,7 @@ def main() -> None:
                     summary = summaries.get(c.uuid, "")
                     src = c.source
                     size = _conversation_size(c.path)
-                    tokens = size // 4
-                    tok_str = f"{tokens // 1000}K" if tokens >= 1000 else str(tokens)
-                    print(f"  {ts}  [{src}]  {name}  ~{tok_str} tok")
+                    print(f"  {ts}  [{src}]  {name}  {_file_size_label(size)}")
                     if summary:
                         print(f"           {summary}")
         return
@@ -2750,14 +2754,7 @@ def main() -> None:
                     ts = c.timestamp[:10] if c.timestamp else "?"
                     name = c.slug or c.uuid[:8]
                     size = _conversation_size(c.path)
-                    tokens = size // 4
-                    if tokens >= 1_000_000:
-                        tok_str = f"{tokens / 1_000_000:.1f}M"
-                    elif tokens >= 1000:
-                        tok_str = f"{tokens // 1000}K"
-                    else:
-                        tok_str = str(tokens)
-                    print(f"  {ts}  {name:30s}  ~{tok_str:>6s} tok  {c.preview[:50]}")
+                    print(f"  {ts}  {name:30s}  {_file_size_label(size):>7s}  {c.preview[:50]}")
         return
 
     if args.show:
