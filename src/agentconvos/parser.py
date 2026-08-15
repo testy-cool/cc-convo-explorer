@@ -1018,11 +1018,33 @@ def _parse_jsonl_claude(path: Path, detail: str = DETAIL_TEXT) -> list[Turn]:
     return turns
 
 
+_CODEX_JS_COMMAND = re.compile(r'cmd:\s*"((?:[^"\\]|\\.)*)"')
+
+
+def _codex_tool_output_text(output) -> str:
+    """Tool output, which newer Codex records write as a list of blocks."""
+    if isinstance(output, str):
+        return output
+    if not isinstance(output, list):
+        return ""
+    parts = [
+        block["text"]
+        for block in output
+        if isinstance(block, dict) and isinstance(block.get("text"), str)
+    ]
+    return "\n".join(parts)
+
+
 def _summarize_codex_tool(name: str, arguments: str) -> str:
     """One-line summary for a Codex function_call."""
     try:
         args = json.loads(arguments) if arguments else {}
     except json.JSONDecodeError:
+        # custom_tool_call carries a snippet of JavaScript rather than JSON.
+        # The command inside it is the readable part.
+        command = _CODEX_JS_COMMAND.search(arguments or "")
+        if command:
+            return f"`{command.group(1)[:120]}`"
         return arguments[:80] if arguments else "(no args)"
     if name in ("exec_command", "shell"):
         cmd = args.get("cmd", args.get("command", ""))
@@ -1083,9 +1105,9 @@ def _parse_jsonl_codex(path: Path, detail: str = DETAIL_TEXT) -> list[Turn]:
             if rec.get("type") != "response_item":
                 continue
             payload = rec.get("payload", {})
-            if payload.get("type") == "function_call_output":
+            if payload.get("type") in ("function_call_output", "custom_tool_call_output"):
                 call_id = payload.get("call_id", "")
-                output = payload.get("output", "")
+                output = _codex_tool_output_text(payload.get("output", ""))
                 # Strip the Codex header (Chunk ID, Wall time, etc.)
                 if "\nOutput:\n" in output:
                     output = output.split("\nOutput:\n", 1)[1]
@@ -1140,10 +1162,15 @@ def _parse_jsonl_codex(path: Path, detail: str = DETAIL_TEXT) -> list[Turn]:
                     seen_user_texts[text_key] = len(turns)
                     turns.append(Turn(role="user", text=text))
 
-        # Tool calls from response_item/function_call
-        elif rtype == "response_item" and payload.get("type") == "function_call" and include_tools:
+        # Tool calls from response_item. Newer Codex sessions log shell work
+        # as custom_tool_call, which carries its arguments in "input".
+        elif (
+            rtype == "response_item"
+            and payload.get("type") in ("function_call", "custom_tool_call")
+            and include_tools
+        ):
             name = payload.get("name", "?")
-            arguments = payload.get("arguments", "")
+            arguments = payload.get("arguments") or payload.get("input") or ""
             call_id = payload.get("call_id", "")
             summary = _summarize_codex_tool(name, arguments)
             tool_line = f"> **{name}**: {summary}"
@@ -1803,7 +1830,7 @@ def _get_stats_codex(path: Path) -> ConversationStats:
                     stats.duration_ms += payload.get("duration_ms", 0)
 
             elif rtype == "response_item":
-                if payload.get("type") == "function_call":
+                if payload.get("type") in ("function_call", "custom_tool_call"):
                     stats.tool_calls += 1
 
     return stats
