@@ -126,6 +126,10 @@ def _fmt_ts(ts: str, date_only: bool = False) -> str:
     return ts[:16].replace("T", " ")
 
 
+def _turns(count: int) -> str:
+    return "1 turn" if count == 1 else f"{count} turns"
+
+
 def _stats_line(path: Path) -> str:
     """Model and token cost for the preview header, empty when unavailable."""
     try:
@@ -233,12 +237,20 @@ def _matching_excerpt(text: str, terms: list[str], width: int = 90) -> str:
     if not ranges:
         return flattened if len(flattened) <= width else flattened[: max(1, width - 1)].rstrip() + "…"
 
+    if len(flattened) <= width:
+        return flattened
+
+    # Only spend width on the ellipses that actually get rendered.
     match_start, _ = ranges[0]
-    content_width = max(20, width - 2)
-    start = max(0, match_start - content_width // 3)
-    end = min(len(flattened), start + content_width)
-    if end == len(flattened):
+    start = max(0, match_start - width // 3)
+    content_width = width - (1 if start else 0)
+    end = start + content_width
+    if end >= len(flattened):
+        end = len(flattened)
         start = max(0, end - content_width)
+        start = max(0, end - (width - (1 if start else 0)))
+    else:
+        end = start + content_width - 1
     prefix = "…" if start else ""
     suffix = "…" if end < len(flattened) else ""
     return prefix + flattened[start:end].strip() + suffix
@@ -501,6 +513,7 @@ class ConvoExplorer(App):
         height: 1fr;
         padding: 1 1;
         background: #0c141c;
+        overflow-x: hidden;
         scrollbar-color: #385467;
         scrollbar-color-hover: #2dd4bf;
         scrollbar-color-active: #5eead4;
@@ -602,6 +615,8 @@ class ConvoExplorer(App):
         self._filter_timer = None
         self._filter_query = ""
         self._filter_generation = 0
+        self._tree_width = 0
+        self._width_timer = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -650,6 +665,25 @@ History appears immediately. Full-text results arrive live while indexing runs i
         self.load_projects()
         self.query_one("#filter-input", Input).focus()
 
+    def on_resize(self, event) -> None:
+        """Row labels are sized to the tree, so a resize has to redraw them."""
+        self._rerender_for_width()
+
+    def _rerender_for_width(self) -> None:
+        try:
+            tree = self.query_one("#nav-tree", Tree)
+        except NoMatches:
+            return
+        width = tree.container_size.width
+        if not width or width == self._tree_width or not self.projects:
+            return
+        self._tree_width = width
+        if self._width_timer is not None:
+            self._width_timer.stop()
+        self._width_timer = self.set_timer(
+            0.1, lambda: self._populate_tree(self.projects, self._filter_query)
+        )
+
     # --- Resize handle ---
 
     def on_mouse_down(self, event) -> None:
@@ -664,7 +698,9 @@ History appears immediately. Full-text results arrive live while indexing runs i
             sidebar.styles.width = new_width
 
     def on_mouse_up(self, event) -> None:
-        self._dragging_sidebar = False
+        if self._dragging_sidebar:
+            self._dragging_sidebar = False
+            self.call_after_refresh(self._rerender_for_width)
 
     # --- Data loading ---
 
@@ -928,10 +964,12 @@ History appears immediately. Full-text results arrive live while indexing runs i
 
         cwd = os.getcwd()
 
-        # Rows wider than the sidebar only produce a horizontal scrollbar.
-        sidebar_width = self.query_one("#sidebar").size.width or 42
-        label_width = max(24, sidebar_width - 8)
-        text_width = max(16, label_width - 16)
+        # Every row costs guide_depth columns per level of nesting before its
+        # label starts, plus the tree's own horizontal padding. Anything wider
+        # than that is invisible and only makes the tree scroll sideways.
+        viewport = tree.container_size.width or (self.query_one("#sidebar").size.width - 4)
+        def budget(depth: int) -> int:
+            return max(16, viewport - 2 - tree.guide_depth * depth)
 
         # Group: source → path_group → [(rel_label, proj, convos)]
         by_source: dict[str, dict[str, list[tuple[str, Project, list]]]] = {}
@@ -1014,7 +1052,7 @@ History appears immediately. Full-text results arrive live while indexing runs i
                 )
 
                 pg_node = source_node.add(
-                    _highlight_matches(gkey, terms),
+                    _highlight_matches(_elide(gkey, budget(1)), terms),
                     data=NodeData(kind="group"),
                     expand=has_cwd or bool(terms),
                 )
@@ -1039,13 +1077,21 @@ History appears immediately. Full-text results arrive live while indexing runs i
                     count = len(convos)
                     total_projects += 1
 
+                    analyzed = self._is_analyzed(proj.folder_name)
+                    # The count and date matter more than a long path, so the
+                    # path is what gives way when the row does not fit. The
+                    # markers occupy the row too, so they come out of its budget.
+                    tail = f"  ({count})  {date_str}"
+                    room = budget(2) - (2 if is_cwd else 0) - (2 if analyzed else 0)
+                    body = _elide(
+                        _elide(rel_label, max(8, room - len(tail))) + tail, room
+                    )
+
                     plabel = Text()
                     if is_cwd:
                         plabel.append("● ", "bold cyan")
-                    plabel.append_text(
-                        _highlight_matches(f"{rel_label}  ({count})  {date_str}", terms)
-                    )
-                    if self._is_analyzed(proj.folder_name):
+                    plabel.append_text(_highlight_matches(body, terms))
+                    if analyzed:
                         plabel.append(" ★", "yellow")
 
                     pnode = pg_node.add(
@@ -1056,13 +1102,16 @@ History appears immediately. Full-text results arrive live while indexing runs i
 
                     for c in convos:
                         d = _fmt_nav_ts(c.timestamp)
+                        prefix = f"  {d}  "
                         summary = summaries.get(c.uuid, "")
                         indexed_snippet = indexed_matches.get(c.uuid, "")
                         if terms and indexed_snippet:
-                            preview = _matching_excerpt(indexed_snippet, terms, width=text_width)
+                            preview = _matching_excerpt(
+                                indexed_snippet, terms, width=max(16, budget(3) - len(prefix))
+                            )
                         else:
                             preview = summary or c.preview or c.slug or c.uuid[:8]
-                        label = _elide(f"  {d}  {preview}", label_width)
+                        label = _elide(prefix + preview, budget(3))
                         pnode.add_leaf(
                             _highlight_matches(label, terms),
                             data=NodeData(kind="convo", meta=c, project=proj),
@@ -1198,8 +1247,8 @@ History appears immediately. Full-text results arrive live while indexing runs i
                 lines = [
                     f"## {title}",
                     f"**Search:** {_escape_markdown_inline(query)}  ",
-                    f"**Matches:** {len(matches)} turns  ",
-                    f"**Date:** {meta.timestamp[:19]}  ",
+                    f"**Matches:** {_turns(len(matches))}  ",
+                    f"**Date:** {_fmt_ts(meta.timestamp)}  ",
                     f"**CWD:** {cwd}  ",
                     f"**Session ID:** `{meta.uuid}`",
                     "",
@@ -1218,7 +1267,7 @@ History appears immediately. Full-text results arrive live while indexing runs i
                         self._set_preview,
                         "\n".join(lines),
                         len(matches),
-                        f"MATCHES ({len(matches)} turns) · R RESUME",
+                        f"MATCHES ({_turns(len(matches))}) · R RESUME",
                     )
                 return
 
@@ -1241,13 +1290,13 @@ History appears immediately. Full-text results arrive live while indexing runs i
                 self._set_preview,
                 header + md,
                 len(turns),
-                f"FULL TRANSCRIPT · {len(turns)} turns" if full else None,
+                f"FULL TRANSCRIPT · {_turns(len(turns))}" if full else None,
             )
 
     def _set_preview(self, md: str, turn_count: int, title: str | None = None) -> None:
         self.query_one("#preview", Markdown).update(md)
         label = title or (
-            f"CONVERSATION · {turn_count} turns" if turn_count else "CONVERSATION"
+            f"CONVERSATION · {_turns(turn_count)}" if turn_count else "CONVERSATION"
         )
         self.query_one("#right-title", Static).update(label)
         preview_scroll = self.query_one("#preview-scroll", VerticalScroll)

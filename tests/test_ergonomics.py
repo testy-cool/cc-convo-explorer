@@ -463,7 +463,7 @@ class TuiErgonomicsTests(unittest.IsolatedAsyncioTestCase):
                 patch("agentconvos.app.parse_jsonl") as parse_transcript,
             ):
                 tui = app_module.ConvoExplorer(search_index=index)
-                async with tui.run_test(size=(160, 36)) as pilot:
+                async with tui.run_test(size=(180, 36)) as pilot:
                     await pilot.pause()
                     search = tui.query_one("#filter-input", Input)
                     search.value = "auth middleware"
@@ -656,34 +656,48 @@ class TuiErgonomicsTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("turn number 0", captured[-1])
             self.assertIn("turn number 39", captured[-1])
 
-    async def test_tree_labels_fit_the_sidebar_instead_of_a_fixed_width(self):
-        """A fixed 72-character label overflows a narrow sidebar and leaves a
-        horizontal scrollbar under the tree."""
-        with tempfile.TemporaryDirectory() as tmp:
-            cwd = Path(tmp)
-            meta = _meta(cwd / "long.jsonl", "wide-session", "2026-08-10T09:00:00", cwd)
-            meta.preview = "w" * 200
-            project = Project("tmp", str(cwd), [meta])
+    async def test_tree_never_scrolls_sideways_whatever_the_names_are(self):
+        """Rows wider than the tree only produce a horizontal scrollbar, so
+        every row kind has to fit: long paths and long first messages alike."""
+        for width in (100, 124, 160):
+            with tempfile.TemporaryDirectory() as tmp:
+                cwd = Path(tmp) / ("deep/" * 8 + "a-very-long-project-name")
+                cwd.mkdir(parents=True)
+                metas = [
+                    _meta(cwd / "a.jsonl", "wide-session", "2026-08-10T09:00:00", cwd),
+                    _meta(cwd / "b.jsonl", "other-session", "2026-08-09T09:00:00", cwd),
+                ]
+                metas[0].preview = "w" * 300
+                project = Project("tmp", str(cwd), metas)
 
-            with patch("agentconvos.app.scan_projects", return_value=[project]):
-                tui = app_module.ConvoExplorer()
-                async with tui.run_test(size=(110, 36)) as pilot:
-                    label = ""
-                    for _ in range(60):
-                        await pilot.pause(0.05)
+                with patch("agentconvos.app.scan_projects", return_value=[project]):
+                    tui = app_module.ConvoExplorer()
+                    async with tui.run_test(size=(width, 36)) as pilot:
+                        tree = tui.query_one("#nav-tree", Tree)
+                        for _ in range(60):
+                            await pilot.pause(0.05)
+                            if tree.root.children:
+                                break
+                        tree.root.expand_all()
+                        await pilot.pause(0.2)
+
                         rows = [
                             str(node.label)
                             for node in tui._walk_tree_nodes()
                             if node.data and node.data.kind == "convo"
                         ]
-                        if rows:
-                            label = rows[0]
-                            break
-                    sidebar_width = tui.query_one("#sidebar").size.width
+                        virtual = tree.virtual_size.width
+                        viewport = tree.container_size.width
 
-        self.assertTrue(label, "no conversation row was rendered")
-        self.assertLessEqual(len(label), sidebar_width)
-        self.assertTrue(label.rstrip().endswith("…"), f"row was not elided: {label!r}")
+            self.assertTrue(rows, f"no rows rendered at {width} columns")
+            self.assertLessEqual(
+                virtual, viewport,
+                f"tree scrolls sideways at {width} columns ({virtual} > {viewport})",
+            )
+            self.assertTrue(
+                any(row.rstrip().endswith("…") for row in rows),
+                f"no row was elided at {width} columns: {rows}",
+            )
 
     async def test_preview_header_shows_branch_model_and_size(self):
         """Deciding whether to resume a session needs more than a date; the
@@ -886,17 +900,15 @@ class TuiErgonomicsTests(unittest.IsolatedAsyncioTestCase):
                 async with tui.run_test(size=(110, 36)) as pilot:
                     for _ in range(60):
                         await pilot.pause(0.05)
-                        labels = [
-                            str(node.label)
+                        rows = [
+                            node.data.project.folder_name
                             for node in tui._walk_tree_nodes()
                             if node.data and node.data.kind == "project"
                         ]
-                        if len(labels) == 2:
+                        if len(rows) == 2:
                             break
 
-        self.assertEqual(len(labels), 2, f"expected two project rows, got {labels}")
-        self.assertIn("zeta-current", labels[0])
-        self.assertIn("alpha-archive", labels[1])
+        self.assertEqual(rows, ["zeta-current", "alpha-archive"])
 
     async def test_broad_filter_is_bounded_and_applied_in_one_batch(self):
         class BroadIndex:
@@ -1071,7 +1083,7 @@ class TuiErgonomicsTests(unittest.IsolatedAsyncioTestCase):
                             await pilot.pause()
 
                         title = str(tui.query_one("#right-title", Static).render())
-                        self.assertEqual(title, "CONVERSATION · 1 turns")
+                        self.assertEqual(title, "CONVERSATION · 1 turn")
                     finally:
                         release_first.set()
 
