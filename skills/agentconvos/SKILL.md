@@ -14,13 +14,17 @@ is usually the part that was never written down.
 
 ## Pick the command by what you need
 
-| You need | Command | Cost |
-|---|---|---|
-| What happened in this directory | `agentconvos --context` | free, instant |
-| A conversation containing some words | `agentconvos --search "terms"` | free, indexed |
-| A decision and its reasoning, across sessions | `agentconvos recall "question"` | a model call |
-| The full text of one conversation | `agentconvos --turns <id> --json` | free |
-| To continue a session in its own agent | `agentconvos --resume <id>` | starts a CLI |
+| You need | Command | Costs money | Costs context |
+|---|---|---|---|
+| What happened in this directory | `agentconvos --context` | no | small |
+| A conversation containing some words | `agentconvos --search "terms"` | no | small |
+| A decision and its reasoning, across sessions | `agentconvos recall "question"` | **yes** | small |
+| The full text of one conversation | `agentconvos --turns <id> --json` | no | **large** |
+| To continue a session in its own agent | `agentconvos --resume <id>` | no | none |
+
+Two different budgets. `recall` spends money; `--turns` spends *your context*,
+and it is the only command here that can swallow a session whole. Neither is a
+reason to avoid them, only to know which one you are spending.
 
 Work down that list. `--context` answers most catch-up questions on its own,
 and `--search` answers most of the rest. Reach for `recall` when the answer is
@@ -31,7 +35,7 @@ spread over several sessions or the user asks *why* something was decided.
 ```bash
 agentconvos --context          # last 5 sessions per agent, with catch-up detail
 agentconvos --context --json   # same, machine-readable
-agentconvos --last 3           # last 3 conversations, compact
+agentconvos --last 3           # last 3 conversations, one line each
 ```
 
 `--context` reports on the **current working directory**, so run it from the
@@ -53,10 +57,17 @@ agentconvos --search "auth" --source codex --json
 Search is case-insensitive and ranked, and runs against a local SQLite index,
 so it is fast even over thousands of sessions. JSON hits carry `uuid`,
 `source`, `timestamp`, `cwd`, `file`, `turn_index`, `role`, and `snippet` -
-enough to cite a specific turn without opening the transcript.
+enough to cite a specific turn without opening the transcript. `turn_index`
+lines up with the positions in `--turns` output.
 
-The very first search on a new machine may spend several minutes building the
-index. That happens once.
+**Results are capped at 50 by default.** A broad query hits that cap easily,
+so never report the number of results as the number of matches in the archive.
+The text output says when it is showing only the top N, and the JSON carries
+`limit` and `truncated`. Raise it with `--limit 200` when you need the real
+shape of something.
+
+The index tracks new sessions, so work from an hour ago is findable. Only the
+very first search on a new machine is slow, while the index is built once.
 
 ## Asking a question the archive has to answer
 
@@ -71,34 +82,50 @@ plain search will not do: the answer spans sessions, or the user wants the
 reasoning rather than the message.
 
 It costs a real model call and needs an authenticated Codex CLI, or
-`--backend agy` for the local AGY bridge. Try `--search` first.
+`--backend agy` to route through the local AGY bridge instead. The bridge runs
+locally but still calls Gemini, so either backend sends transcript excerpts to
+a model provider. Try `--search` first.
 
 ## Reading a conversation without drowning in it
 
 ```bash
 agentconvos --turns <id> --json                  # normalized user/assistant turns
-agentconvos --turns <id> --json --detail full    # plus tool calls and results
-agentconvos --concat <id>                        # markdown export
+agentconvos --turns <id> --json --detail tools   # plus the commands that ran
+agentconvos --turns <id> --json --detail full    # plus every tool result
 ```
 
 `--turns` defaults to text only: no tool calls, no tool results, no reasoning
 blocks, no harness bootstrap noise. That default exists so you can read a
 conversation without spending your context on machine chatter. Only ask for
-`--detail tools` or `full` when the tool activity is the thing you need.
+`--detail tools` or `full` when the tool activity is the thing you need, and
+know that `full` is where transcripts get enormous: one real session measured
+4KB of text and 358KB with every tool result attached.
 
-Sessions can be hundreds of thousands of tokens. Check `estimated_tokens` in
-`--context --json` before pulling a whole transcript into your context.
+**Size it before you read it.** `estimated_tokens` in `--context --json` is
+computed from the raw file, which includes all the tool traffic that the
+default read strips, so it overstates a text-only read by one to two orders of
+magnitude. Treat it as an upper bound, not a measurement. To find out what a
+read will actually cost, measure it:
+
+```bash
+agentconvos --turns <id> --json | wc -c        # bytes; roughly 4 bytes a token
+```
+
+That also works for conversations outside the current directory, which
+`--context` cannot see.
 
 ## Continuing or handing off work
 
 ```bash
-agentconvos --resume <id> --dry-run   # print the command, run nothing
+agentconvos --resume <id> --dry-run   # print the command, start nothing
 agentconvos --resume <id>             # continue in the agent that created it
+agentconvos --handoff codex --dry-run # print the handoff command
 agentconvos --handoff codex           # move this directory's context to Codex
 ```
 
 Use `--dry-run` first and show the user the command. Resume replaces the
-session they are in; that is their call, not yours.
+session they are in; that is their call, not yours. Note that `--dry-run`
+stops the agent from launching, not the handoff export from being written.
 
 ## Sending data off the machine
 
@@ -106,11 +133,20 @@ Everything above is local. Three things are not:
 
 - `agentconvos --analyze` sends conversation text to Gemini
 - `agentconvos --summarize` sends conversation text to Gemini
-- `agentconvos recall` sends transcript excerpts to its retrieval worker
+- `agentconvos recall` sends transcript excerpts to OpenAI via the Codex CLI,
+  or to Gemini when run with `--backend agy`
 
 Conversation archives hold whatever the user has ever pasted into an agent:
 credentials, customer data, unreleased work. Do not run these on someone's
 archive without telling them what leaves the machine.
+
+Two commands write plaintext copies of conversations to disk rather than
+returning them to you. `--concat` saves a combined markdown file under
+`~/.claude/convo-explorer/exports/` and prints only the path. `--handoff`
+writes one into `output/` in the current directory, and does so even with
+`--dry-run`, which suppresses launching the agent but not the export. Neither
+puts the transcript on stdout, so do not reach for them to *read* a
+conversation; use `--turns` for that.
 
 ## Identifiers
 
