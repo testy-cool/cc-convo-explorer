@@ -564,6 +564,42 @@ class TuiErgonomicsTests(unittest.IsolatedAsyncioTestCase):
                 populate_tree.assert_not_called()
                 show_summary.assert_not_called()
 
+    async def test_preview_header_shortens_the_home_directory(self):
+        """The tree groups paths under ~, so the preview should agree instead
+        of printing the whole absolute path."""
+        shorten = getattr(app_module, "_short_path", None)
+        self.assertIsNotNone(shorten, "path shortening helper is missing")
+        self.assertEqual(shorten("/srv/elsewhere"), "/srv/elsewhere")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            cwd = home / "work" / "billing-api"
+            cwd.mkdir(parents=True)
+            meta = _meta(cwd / "s.jsonl", "preview-home", "2026-07-18T10:30:00", cwd)
+            turns = [Turn("user", "hello"), Turn("assistant", "hi")]
+            captured: list[str] = []
+
+            with patch("agentconvos.app.scan_projects", return_value=[]):
+                tui = app_module.ConvoExplorer()
+                async with tui.run_test(size=(100, 32)) as pilot:
+                    with (
+                        patch("agentconvos.app.parse_jsonl", return_value=turns),
+                        patch("pathlib.Path.home", return_value=home),
+                        patch.object(
+                            tui, "_set_preview",
+                            side_effect=lambda md, *a, **k: captured.append(md),
+                        ),
+                    ):
+                        tui.request_preview(meta)
+                        for _ in range(60):
+                            await pilot.pause(0.05)
+                            if captured:
+                                break
+
+            self.assertTrue(captured, "preview was never rendered")
+            self.assertIn("**CWD:** ~/work/billing-api", captured[0])
+            self.assertNotIn(str(cwd), captured[0])
+
     async def test_late_index_callbacks_after_shutdown_are_ignored(self):
         """A slow index sync can finish after the app exits; its UI callbacks
         must not crash on the already-removed status widgets."""

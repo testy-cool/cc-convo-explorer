@@ -1048,7 +1048,7 @@ History appears immediately. Full-text results arrive live while indexing runs i
                 matches.sort(key=lambda item: (item[0], -item[1]), reverse=True)
                 visible = matches[:20]
                 title = _highlight_markdown(meta.slug or meta.uuid, terms)
-                cwd = _highlight_markdown(meta.cwd or "(unknown)", terms)
+                cwd = _highlight_markdown(_short_path(meta.cwd) if meta.cwd else "(unknown)", terms)
                 lines = [
                     f"## {title}",
                     f"**Search:** {_escape_markdown_inline(query)}  ",
@@ -1081,7 +1081,7 @@ History appears immediately. Full-text results arrive live while indexing runs i
         md = to_markdown(tail)
         skipped = len(turns) - len(tail)
         title = _highlight_markdown(meta.slug or meta.uuid, terms)
-        cwd = _highlight_markdown(meta.cwd or "(unknown)", terms)
+        cwd = _highlight_markdown(_short_path(meta.cwd) if meta.cwd else "(unknown)", terms)
         header = f"## {title}\n**Date:** {meta.timestamp[:19]}  \n**CWD:** {cwd}  \n**Session ID:** `{meta.uuid}`  \n**Turns:** {len(turns)} total"
         if skipped:
             header += f" (showing last {len(tail)})"
