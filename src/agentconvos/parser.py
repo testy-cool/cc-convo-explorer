@@ -129,9 +129,12 @@ def _detect_format(path: Path) -> str:
             if not first_line.strip():
                 first_line = f.readline()
             rec = json.loads(first_line)
+            if not isinstance(rec, dict):
+                # A line that is not an object tells us nothing about the
+                # format, and asking it for fields would raise.
+                return "claude"
             if (
-                isinstance(rec, dict)
-                and rec.get("type") == "clihow_thread"
+                rec.get("type") == "clihow_thread"
                 and rec.get("schemaVersion") == 1
                 and isinstance(rec.get("id"), str)
             ):
@@ -183,6 +186,11 @@ def get_meta(path: Path) -> ConversationMeta | None:
 _COMMAND_NAME_RE = re.compile(r"<command-name>([^<]+)</command-name>")
 _COMMAND_ARGS_RE = re.compile(r"<command-args>([^<]*)</command-args>")
 _TASK_RE = re.compile(r"<task>\s*(.*?)\s*(?:</task>|$)", re.DOTALL)
+
+
+def _as_text(value) -> str:
+    """A string field from an untrusted record, or "" when it is not one."""
+    return value if isinstance(value, str) else ""
 
 
 def _clean_claude_text(text: str) -> str:
@@ -266,14 +274,17 @@ def _get_meta_claude(path: Path) -> ConversationMeta | None:
                     rec = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if rec.get("type") != "user":
+                # Records are whatever a harness wrote; treat every field as
+                # untrusted rather than letting one odd line end the scan.
+                if not isinstance(rec, dict) or rec.get("type") != "user":
                     continue
                 if first is None:
                     first = rec
-                slug = slug or rec.get("slug", "")
-                cwd = cwd or rec.get("cwd", "")
-                branch = branch or rec.get("gitBranch", "")
-                content = rec.get("message", {}).get("content", "")
+                slug = slug or _as_text(rec.get("slug"))
+                cwd = cwd or _as_text(rec.get("cwd"))
+                branch = branch or _as_text(rec.get("gitBranch"))
+                message = rec.get("message")
+                content = message.get("content", "") if isinstance(message, dict) else message
                 text = _claude_user_text(content)
                 if len(text) >= 3:
                     preview = text.replace("\n", " ")[:120]
@@ -288,7 +299,7 @@ def _get_meta_claude(path: Path) -> ConversationMeta | None:
         path=path,
         uuid=path.stem,
         slug=slug,
-        timestamp=first.get("timestamp", ""),
+        timestamp=_as_text(first.get("timestamp")),
         cwd=cwd,
         preview=preview or fallback,
         git_branch=branch,

@@ -653,6 +653,43 @@ class ClaudeParserTests(unittest.TestCase):
 
         self.assertEqual(meta.preview, "Build the headline generator")
 
+    def test_malformed_records_do_not_crash_the_scan(self):
+        """get_meta runs over every file in the archive, and scan_projects does
+        not guard it, so one odd record must not take down the whole scan."""
+        # Shapes carrying no readable text: the next real message wins.
+        empty_shapes = [
+            {"type": "user", "message": None},
+            [1, 2, 3],
+            "a bare string line",
+            {"type": "user", "message": {"content": {"text": "a dict"}}},
+            {"type": "user", "message": {"content": 42}},
+            {"type": "user", "message": {"content": ["a plain block"]}},
+        ]
+        # A message logged as a bare string is readable, so it is used as-is.
+        text_shapes = [{"type": "user", "message": "logged as a bare string"}]
+
+        for index, shape in enumerate(empty_shapes + text_shapes):
+            expected = (
+                "logged as a bare string"
+                if shape in text_shapes
+                else "the real question"
+            )
+            with self.subTest(shape=index):
+                with tempfile.TemporaryDirectory() as tmp:
+                    path = self._write_session(tmp, [
+                        shape,
+                        {
+                            "type": "user",
+                            "timestamp": "2026-08-04T09:07:00",
+                            "message": {"role": "user", "content": "the real question"},
+                        },
+                    ])
+
+                    meta = get_meta(path)
+
+                self.assertIsNotNone(meta, f"shape {index} lost the conversation")
+                self.assertEqual(meta.preview, expected)
+
     def test_meta_preview_reads_list_content_blocks(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = self._write_session(tmp, [
