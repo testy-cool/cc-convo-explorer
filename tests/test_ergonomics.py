@@ -463,7 +463,7 @@ class TuiErgonomicsTests(unittest.IsolatedAsyncioTestCase):
                 patch("agentconvos.app.parse_jsonl") as parse_transcript,
             ):
                 tui = app_module.ConvoExplorer(search_index=index)
-                async with tui.run_test(size=(110, 36)) as pilot:
+                async with tui.run_test(size=(160, 36)) as pilot:
                     await pilot.pause()
                     search = tui.query_one("#filter-input", Input)
                     search.value = "auth middleware"
@@ -655,6 +655,35 @@ class TuiErgonomicsTests(unittest.IsolatedAsyncioTestCase):
             self.assertGreater(len(captured), 1, "full transcript was never rendered")
             self.assertIn("turn number 0", captured[-1])
             self.assertIn("turn number 39", captured[-1])
+
+    async def test_tree_labels_fit_the_sidebar_instead_of_a_fixed_width(self):
+        """A fixed 72-character label overflows a narrow sidebar and leaves a
+        horizontal scrollbar under the tree."""
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp)
+            meta = _meta(cwd / "long.jsonl", "wide-session", "2026-08-10T09:00:00", cwd)
+            meta.preview = "w" * 200
+            project = Project("tmp", str(cwd), [meta])
+
+            with patch("agentconvos.app.scan_projects", return_value=[project]):
+                tui = app_module.ConvoExplorer()
+                async with tui.run_test(size=(110, 36)) as pilot:
+                    label = ""
+                    for _ in range(60):
+                        await pilot.pause(0.05)
+                        rows = [
+                            str(node.label)
+                            for node in tui._walk_tree_nodes()
+                            if node.data and node.data.kind == "convo"
+                        ]
+                        if rows:
+                            label = rows[0]
+                            break
+                    sidebar_width = tui.query_one("#sidebar").size.width
+
+        self.assertTrue(label, "no conversation row was rendered")
+        self.assertLessEqual(len(label), sidebar_width)
+        self.assertTrue(label.rstrip().endswith("…"), f"row was not elided: {label!r}")
 
     def test_footer_leads_with_the_flagship_actions(self):
         """Resume, handoff and search must be visible in the footer instead of
@@ -1136,7 +1165,7 @@ class TuiErgonomicsTests(unittest.IsolatedAsyncioTestCase):
                 patch("agentconvos.app.parse_jsonl", return_value=turns),
             ):
                 tui = app_module.ConvoExplorer(search_index=index)
-                async with tui.run_test(size=(110, 36)) as pilot:
+                async with tui.run_test(size=(160, 36)) as pilot:
                     await pilot.pause()
                     search = tui.query_one("#filter-input", Input)
                     search.focus()

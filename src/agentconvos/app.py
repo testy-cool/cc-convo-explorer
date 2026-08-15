@@ -125,6 +125,14 @@ def _fmt_ts(ts: str, date_only: bool = False) -> str:
     return ts[:16].replace("T", " ")
 
 
+def _elide(text: str, width: int) -> str:
+    """Trim to width, marking the cut so a clipped row is obvious."""
+    text = text.rstrip()
+    if len(text) <= width:
+        return text
+    return text[: max(1, width - 1)].rstrip() + "…"
+
+
 def _fmt_nav_ts(ts: str) -> str:
     """Format an ISO timestamp for a narrow navigation row."""
     formatted = _fmt_ts(ts)
@@ -900,6 +908,11 @@ History appears immediately. Full-text results arrive live while indexing runs i
 
         cwd = os.getcwd()
 
+        # Rows wider than the sidebar only produce a horizontal scrollbar.
+        sidebar_width = self.query_one("#sidebar").size.width or 42
+        label_width = max(24, sidebar_width - 8)
+        text_width = max(16, label_width - 16)
+
         # Group: source → path_group → [(rel_label, proj, convos)]
         by_source: dict[str, dict[str, list[tuple[str, Project, list]]]] = {}
         filtered_count = filter_result.filtered_count
@@ -1026,10 +1039,10 @@ History appears immediately. Full-text results arrive live while indexing runs i
                         summary = summaries.get(c.uuid, "")
                         indexed_snippet = indexed_matches.get(c.uuid, "")
                         if terms and indexed_snippet:
-                            preview = _matching_excerpt(indexed_snippet, terms, width=64)
+                            preview = _matching_excerpt(indexed_snippet, terms, width=text_width)
                         else:
                             preview = summary or c.preview or c.slug or c.uuid[:8]
-                        label = f"  {d}  {preview[:72]}"
+                        label = _elide(f"  {d}  {preview}", label_width)
                         pnode.add_leaf(
                             _highlight_matches(label, terms),
                             data=NodeData(kind="convo", meta=c, project=proj),
