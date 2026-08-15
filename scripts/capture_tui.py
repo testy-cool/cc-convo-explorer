@@ -42,13 +42,10 @@ async def main():
             for _ in range(60):
                 await pilot.pause(0.05)
 
-            # Open the first matching conversation so the preview pane shows
-            # a real transcript rather than the search summary.
-            for node in app._walk_tree_nodes():
-                if node.data and node.data.kind == "convo":
-                    tree.select_node(node)
-                    tree.action_select_cursor()
-                    break
+            # Enter opens the highlighted result and moves focus to the tree,
+            # which is also what makes the footer show the conversation keys
+            # instead of only the two that work while typing.
+            await pilot.press("enter")
             for _ in range(60):
                 await pilot.pause(0.05)
 

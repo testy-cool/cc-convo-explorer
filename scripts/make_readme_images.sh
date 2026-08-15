@@ -15,6 +15,21 @@ COLS=124
 PY="$REPO/.venv/bin/python"
 [ -x "$PY" ] || PY=python
 
+for tool in termshot tmux; do
+  command -v "$tool" >/dev/null 2>&1 || {
+    echo "error: $tool is not on PATH" >&2
+    echo "  termshot: go install github.com/homeport/termshot/cmd/termshot@latest" >&2
+    exit 1
+  }
+done
+
+# Each capture runs behind tmux, so a failure there is invisible to this
+# script. Refuse to claim success for an image that was never written.
+assert_written() {
+  local file="$1"
+  [ -s "$file" ] || { echo "error: $file was not written" >&2; exit 1; }
+}
+
 $PY "$REPO/scripts/make_demo_archive.py" "$DEMO"
 
 # A short name on PATH so the captured command reads "agentconvos", not the
@@ -33,6 +48,7 @@ shoot() {
   timeout 90 bash -c \
     'until tmux capture-pane -t acshot -p 2>/dev/null | grep -q SHOT_DONE; do sleep 0.4; done'
   tmux kill-session -t acshot 2>/dev/null || true
+  assert_written "$REPO/assets/$name.png"
   echo "wrote assets/$name.png"
 }
 
@@ -54,6 +70,7 @@ shoot_frame() {
   tmux capture-pane -e -p -t acshot | sed '/SHOT_DONE/,$d' > "$raw"
   tmux kill-session -t acshot 2>/dev/null || true
   termshot --raw-read "$raw" --columns $COLS --filename "$REPO/assets/$name.png"
+  assert_written "$REPO/assets/$name.png"
   echo "wrote assets/$name.png"
 }
 
@@ -82,6 +99,7 @@ fi
 # The browser redraws over itself, so termshot cannot capture it. Textual
 # exports its own screenshot instead.
 $PY "$REPO/scripts/capture_tui.py" "$DEMO" "$REPO/assets/demo-tui.svg" "rate limit"
+assert_written "$REPO/assets/demo-tui.svg"
 echo "wrote assets/demo-tui.svg"
 
 # A terminal capture uses a handful of colours, so a palette cuts the file size

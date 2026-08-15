@@ -229,19 +229,32 @@ appear live while a first-time index is still filling.
 
 The search box is focused at launch and searches titles, prompts, paths, branches,
 summaries, and full conversation text. Matching context appears directly in the
-tree; press Enter to open the first match. Conversation previews parse lazily and
-highlight the matching turns. Resume asks for confirmation with the agent, working
-directory, full session ID, and command.
+tree. Arrow keys walk the results without leaving the search box, so you can type,
+arrow to the conversation you want, and press Enter to open it. Conversation
+previews parse lazily and highlight the matching turns. Resume asks for
+confirmation with the agent, working directory, full session ID, and command.
+
+Projects are ordered by their most recent conversation, with the project for the
+current directory pinned first. Conversation titles come from the first message
+you actually typed, so slash commands and harness boilerplate do not become the
+name of a session.
+
+Press `?` for the full key list. The headline keys:
 
 | Key | Action |
 |-----|--------|
 | `/` | Focus full-text search |
-| `S` | Toggle select |
+| `↑` `↓` | Walk results while still typing |
+| `Enter` | Open the highlighted conversation |
+| `V` | Read the whole transcript, not just the tail |
 | `R` | Review and resume session |
 | `H` | Handoff to new session |
 | `E` | Export markdown |
 | `A` | Analyze with Gemini |
+| `Y` | Copy the session ID |
+| `S` | Toggle select |
 | `Tab` | Switch panels |
+| `?` | Every key |
 | `Q` | Quit |
 
 ## File locations

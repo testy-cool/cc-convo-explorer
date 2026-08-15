@@ -127,10 +127,25 @@ claude_session(
 codex_session(
     checkout, "019e783a-e2bb-7ec2-9d2c-def97ab8c003", "2026-05-30T09:15:00",
     [
-        ("Add rate limiting to the public API.",
-         "Token bucket per API key, 100 a minute."),
+        ("Add rate limiting to the public API. Per API key, not per IP, "
+         "because most of our traffic comes through two proxies.",
+         "A token bucket per API key, 100 requests a minute, refilling "
+         "continuously rather than on a fixed window. Fixed windows let a "
+         "caller spend the whole budget in the last second of one window and "
+         "again in the first second of the next."),
         ("What happens when Redis is down?",
-         "Every request fails closed with a 503. I would rather fail open and log."),
+         "Right now every request fails closed with a 503, because the "
+         "middleware treats a missing counter as a full bucket. I would "
+         "rather fail open and log it, since a rate limiter outage should "
+         "not become an API outage."),
+        ("Agreed, fail open. Where do we put the limit headers?",
+         "On every response, not just rejections: X-RateLimit-Limit, "
+         "X-RateLimit-Remaining, and X-RateLimit-Reset. Clients that only "
+         "see them on a 429 have no way to slow down before they get one."),
+        ("Do the internal services go through the same limiter?",
+         "They have their own keys, so they are limited separately at a much "
+         "higher ceiling. The checkout worker alone bursts past 100 a minute "
+         "during a retry storm, which would trip the public limit."),
     ],
 )
 

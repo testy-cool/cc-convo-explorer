@@ -216,6 +216,11 @@ def _match_ranges(text: str, terms: list[str]) -> list[tuple[int, int]]:
     for start, end in sorted(candidates, key=lambda item: (item[0], -(item[1] - item[0]))):
         if ranges and start < ranges[-1][1]:
             continue
+        if ranges and start == ranges[-1][1]:
+            # Touching matches, as in "rate" + "limit" inside RateLimit. Two
+            # separate bold spans would emit **** and render as asterisks.
+            ranges[-1] = (ranges[-1][0], end)
+            continue
         ranges.append((start, end))
     return ranges
 

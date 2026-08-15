@@ -101,6 +101,16 @@ class SearchErgonomicsTests(unittest.TestCase):
         self.assertTrue(result.endswith("…"))
         self.assertIn("AUTH MIDDLEWARE", result)
 
+    def test_markdown_highlight_joins_touching_matches(self):
+        """Two matches that touch would emit **** between them, which markdown
+        renders as literal asterisks instead of bold text."""
+        highlight = getattr(app_module, "_highlight_markdown", None)
+
+        self.assertEqual(
+            highlight("X-RateLimit-Reset", ["rate", "limit"]),
+            "X-**RateLimit**-Reset",
+        )
+
     def test_markdown_highlight_makes_matches_visible_in_preview(self):
         highlight = getattr(app_module, "_highlight_markdown", None)
         self.assertIsNotNone(highlight, "preview search highlighting is missing")
