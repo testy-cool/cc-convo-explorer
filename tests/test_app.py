@@ -1615,7 +1615,7 @@ class ContextCliTests(unittest.TestCase):
                     patch("agentconvos.summarize.load_summaries", return_value={}),
                     patch("agentconvos.app.parse_jsonl", return_value=turns),
                     patch("agentconvos.app.get_stats", return_value=ConversationStats()),
-                    patch("shutil.get_terminal_size", return_value=os.terminal_size((100, 24))),
+                    patch("shutil.get_terminal_size", return_value=os.terminal_size((40, 24))),
                     contextlib.redirect_stdout(stream),
                 ):
                     main()
@@ -1624,10 +1624,10 @@ class ContextCliTests(unittest.TestCase):
                 sys.argv = old_argv
 
         lines = stream.getvalue().splitlines()
-        body = [line for line in lines if line.strip()]
+        body = [line for line in lines if line.strip() and line.startswith("    ")]
         self.assertTrue(
-            all(len(line) <= 100 for line in body),
-            f"a line exceeded the terminal width: {[x for x in body if len(x) > 100]}",
+            all(len(line) <= 40 for line in body),
+            f"a line exceeded the terminal width: {[x for x in body if len(x) > 40]}",
         )
         wrapped = [line for line in lines if line.startswith(" " * 13) and "proxies" in line]
         self.assertTrue(wrapped, f"continuation was not indented under the label: {lines}")

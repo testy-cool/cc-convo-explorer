@@ -9,6 +9,7 @@ import textwrap
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from unicodedata import east_asian_width
 
 from rich.text import Text
 from textual import work
@@ -152,12 +153,26 @@ def _stats_line(path: Path) -> str:
     return "  \n" + " · ".join(parts) if parts else ""
 
 
+def _cell_len(text: str) -> int:
+    """Terminal columns the text occupies; CJK and emoji take two."""
+    return sum(2 if east_asian_width(char) in "WF" else 1 for char in text)
+
+
 def _elide(text: str, width: int) -> str:
     """Trim to width, marking the cut so a clipped row is obvious."""
     text = text.rstrip()
-    if len(text) <= width:
+    if _cell_len(text) <= width:
         return text
-    return text[: max(1, width - 1)].rstrip() + "…"
+    budget = max(1, width - 1)  # the ellipsis needs a column
+    kept: list[str] = []
+    used = 0
+    for char in text:
+        size = 2 if east_asian_width(char) in "WF" else 1
+        if used + size > budget:
+            break
+        kept.append(char)
+        used += size
+    return "".join(kept).rstrip() + "…"
 
 
 def _fmt_nav_ts(ts: str) -> str:
@@ -2519,7 +2534,9 @@ def main() -> None:
             label = "Context" if args.context else "Last"
             print(f"\n{label} for {_short_path(cwd)} ({len(cwd_convos)} total):\n")
             if args.context:
-                width = max(60, shutil.get_terminal_size((100, 24)).columns)
+                # Wrapping wider than the terminal makes it wrap again at the
+                # edge, which is the misalignment this is here to prevent.
+                width = max(28, shutil.get_terminal_size((100, 24)).columns)
 
                 def _print_context_field(label: str, text: str) -> None:
                     prefix = f"    {label:<9}"

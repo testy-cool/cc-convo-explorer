@@ -101,6 +101,20 @@ class SearchErgonomicsTests(unittest.TestCase):
         self.assertTrue(result.endswith("…"))
         self.assertIn("AUTH MIDDLEWARE", result)
 
+    def test_elide_measures_terminal_cells_not_characters(self):
+        """A CJK character occupies two cells, so counting characters lets a
+        row overflow the sidebar it was measured against."""
+        elide = getattr(app_module, "_elide", None)
+        self.assertIsNotNone(elide, "row eliding helper is missing")
+        cells = getattr(app_module, "_cell_len", None)
+        self.assertIsNotNone(cells, "terminal width helper is missing")
+
+        self.assertEqual(cells("abc"), 3)
+        self.assertEqual(cells("界界"), 4)
+        self.assertLessEqual(cells(elide("界" * 20, 16)), 16)
+        self.assertLessEqual(cells(elide("a" * 40, 16)), 16)
+        self.assertEqual(elide("short", 16), "short")
+
     def test_markdown_highlight_joins_touching_matches(self):
         """Two matches that touch would emit **** between them, which markdown
         renders as literal asterisks instead of bold text."""
