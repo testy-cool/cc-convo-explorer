@@ -891,6 +891,90 @@ class TuiErgonomicsTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(parsed[-1], convos[-1].data.meta.path.name)
 
+    async def test_returning_to_a_conversation_after_a_project_row_previews_it(self):
+        """The project digest replaces the transcript, so coming back to the
+        same conversation has to render it again rather than assume it is up."""
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp)
+            metas = [
+                _meta(cwd / "a.jsonl", "back-a", "2026-08-10T09:00:00", cwd),
+                _meta(cwd / "b.jsonl", "back-b", "2026-08-09T09:00:00", cwd),
+            ]
+            project = Project("tmp", str(cwd), metas)
+            shown: list[str] = []
+
+            with patch("agentconvos.app.scan_projects", return_value=[project]):
+                tui = app_module.ConvoExplorer()
+                async with tui.run_test(size=(120, 36)) as pilot:
+                    tree = tui.query_one("#nav-tree", Tree)
+                    for _ in range(60):
+                        await pilot.pause(0.05)
+                        if tree.root.children:
+                            break
+                    tree.root.expand_all()
+                    await pilot.pause(0.2)
+
+                    convo = next(
+                        n for n in tui._walk_tree_nodes()
+                        if n.data and n.data.kind == "convo"
+                    )
+                    project_row = next(
+                        n for n in tui._walk_tree_nodes()
+                        if n.data and n.data.kind == "project"
+                    )
+
+                    with (
+                        patch("agentconvos.app.parse_jsonl", return_value=[Turn("user", "hello")]),
+                        patch.object(
+                            tui, "_set_preview",
+                            side_effect=lambda md, *a, **k: shown.append(md),
+                        ),
+                    ):
+                        tree.move_cursor(convo)
+                        await pilot.pause(0.4)
+                        tree.move_cursor(project_row)
+                        await pilot.pause(0.4)
+                        tree.move_cursor(convo)
+                        await pilot.pause(0.4)
+
+        self.assertGreaterEqual(len(shown), 3, f"only rendered {len(shown)} previews")
+        self.assertIn("Session ID:", shown[0])          # the conversation
+        self.assertIn("2 conversations", shown[1])      # the project digest
+        self.assertIn("Session ID:", shown[-1])         # the conversation again
+
+    async def test_opening_the_highlighted_row_does_not_parse_it_twice(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp)
+            meta = _meta(cwd / "a.jsonl", "once", "2026-08-10T09:00:00", cwd)
+            project = Project("tmp", str(cwd), [meta])
+            parsed: list[str] = []
+
+            with patch("agentconvos.app.scan_projects", return_value=[project]):
+                tui = app_module.ConvoExplorer()
+                async with tui.run_test(size=(120, 36)) as pilot:
+                    tree = tui.query_one("#nav-tree", Tree)
+                    for _ in range(60):
+                        await pilot.pause(0.05)
+                        if tree.root.children:
+                            break
+                    tree.root.expand_all()
+                    await pilot.pause(0.2)
+                    convo = next(
+                        n for n in tui._walk_tree_nodes()
+                        if n.data and n.data.kind == "convo"
+                    )
+
+                    with patch(
+                        "agentconvos.app.parse_jsonl",
+                        side_effect=lambda p: parsed.append(p.name) or [Turn("user", "x")],
+                    ):
+                        tree.move_cursor(convo)
+                        await pilot.pause(0.4)
+                        tree.select_node(convo)   # what Enter does
+                        await pilot.pause(0.4)
+
+        self.assertEqual(len(parsed), 1, f"transcript parsed {len(parsed)} times: {parsed}")
+
     async def test_arrow_keys_walk_results_from_the_search_box(self):
         """↑/↓ must move the result cursor and preview it while the search box
         keeps focus, and Enter must open the highlighted conversation."""
