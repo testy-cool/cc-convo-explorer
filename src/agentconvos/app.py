@@ -55,6 +55,7 @@ _SOURCE_STYLE = {
 _SOURCE_ORDER = ["claude", "codex", "pi", "agy", "opencode", "clihow"]
 _RESUMABLE_SOURCES = frozenset(_SOURCE_ORDER)
 _FILTER_DEBOUNCE_SECONDS = 0.18
+_HIGHLIGHT_DEBOUNCE_SECONDS = 0.12
 _FILTER_RESULT_LIMIT = 200
 
 
@@ -624,6 +625,7 @@ class ConvoExplorer(App):
         self._filter_generation = 0
         self._tree_width = 0
         self._width_timer = None
+        self._highlight_timer = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -1192,14 +1194,31 @@ History appears immediately. Full-text results arrive live while indexing runs i
         self._set_preview("\n".join(lines), 0, f"PROJECT · {len(convos)} conversations")
 
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
-        """Preview a conversation as soon as the cursor lands on it."""
+        """Preview the conversation the cursor rests on.
+
+        Scanning through results passes over many rows; parsing each one would
+        read transcripts nobody is going to look at, so the load waits until
+        the cursor stops moving.
+        """
         data: NodeData | None = event.node.data
-        if data and data.kind == "convo" and data.meta:
-            if self.current_meta is data.meta:
-                return
-            self.current_meta = data.meta
-            query = self.query_one("#filter-input", Input).value.strip()
-            self.request_preview(data.meta, query)
+        if not data or data.kind != "convo" or not data.meta:
+            return
+        if self.current_meta is data.meta:
+            return
+        self.current_meta = data.meta
+        if self._highlight_timer is not None:
+            self._highlight_timer.stop()
+        self._highlight_timer = self.set_timer(
+            _HIGHLIGHT_DEBOUNCE_SECONDS,
+            lambda meta=data.meta: self._preview_highlighted(meta),
+        )
+
+    def _preview_highlighted(self, meta: ConversationMeta) -> None:
+        self._highlight_timer = None
+        if self.current_meta is not meta:  # the cursor moved on
+            return
+        query = self.query_one("#filter-input", Input).value.strip()
+        self.request_preview(meta, query)
 
     def request_preview(
         self, meta: ConversationMeta, query: str = "", *, full: bool = False

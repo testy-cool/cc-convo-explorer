@@ -837,6 +837,60 @@ class TuiErgonomicsTests(unittest.IsolatedAsyncioTestCase):
                 await pilot.pause(0.05)
                 self.assertNotIsInstance(tui.screen, app_module.HelpScreen)
 
+    async def test_scanning_past_rows_does_not_parse_every_transcript(self):
+        """Arrowing through results should preview where the cursor rests, not
+        parse every conversation it passes over on the way."""
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp)
+            metas = [
+                _meta(cwd / f"s{index}.jsonl", f"scan-{index}", f"2026-08-{10 - index:02d}T09:00:00", cwd)
+                for index in range(6)
+            ]
+            project = Project("tmp", str(cwd), metas)
+            parsed: list[str] = []
+
+            with patch("agentconvos.app.scan_projects", return_value=[project]):
+                tui = app_module.ConvoExplorer()
+                async with tui.run_test(size=(110, 36)) as pilot:
+                    tree = tui.query_one("#nav-tree", Tree)
+                    for _ in range(60):
+                        await pilot.pause(0.05)
+                        if tree.root.children:
+                            break
+                    tree.root.expand_all()
+                    await pilot.pause(0.1)
+
+                    convos = [
+                        node
+                        for node in tui._walk_tree_nodes()
+                        if node.data and node.data.kind == "convo"
+                    ]
+                    self.assertGreaterEqual(len(convos), 6)
+
+                    with patch(
+                        "agentconvos.app.parse_jsonl",
+                        side_effect=lambda path: parsed.append(path.name) or [Turn("user", "x")],
+                    ):
+                        # Sweep the cursor across every row without resting.
+                        # move_cursor is what an arrow key does; select_node
+                        # would be an explicit open, which loads immediately.
+                        for node in convos:
+                            tree.move_cursor(node)
+                            await pilot.pause(0.01)
+                        # Then rest, the way a reader does.
+                        for _ in range(40):
+                            await pilot.pause(0.05)
+                            if parsed:
+                                break
+                        await pilot.pause(0.3)
+
+        self.assertTrue(parsed, "the conversation the cursor rested on was never previewed")
+        self.assertLessEqual(
+            len(parsed), 2,
+            f"scanning parsed {len(parsed)} transcripts: {parsed}",
+        )
+        self.assertEqual(parsed[-1], convos[-1].data.meta.path.name)
+
     async def test_arrow_keys_walk_results_from_the_search_box(self):
         """↑/↓ must move the result cursor and preview it while the search box
         keeps focus, and Enter must open the highlighted conversation."""
@@ -879,6 +933,11 @@ class TuiErgonomicsTests(unittest.IsolatedAsyncioTestCase):
                         self.assertTrue(search.has_focus, "arrows must not steal focus")
                         self.assertIsNotNone(node.data, "cursor never reached a conversation")
                         self.assertEqual(node.data.kind, "convo")
+                        # The highlight preview waits for the cursor to settle.
+                        for _ in range(40):
+                            await pilot.pause(0.05)
+                            if node.data.meta.uuid in previewed:
+                                break
                         self.assertIn(node.data.meta.uuid, previewed)
 
                         await pilot.press("enter")
