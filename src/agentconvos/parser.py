@@ -180,30 +180,119 @@ def get_meta(path: Path) -> ConversationMeta | None:
     return _get_meta_claude(path)
 
 
+_COMMAND_NAME_RE = re.compile(r"<command-name>([^<]+)</command-name>")
+_COMMAND_ARGS_RE = re.compile(r"<command-args>([^<]*)</command-args>")
+_TASK_RE = re.compile(r"<task>\s*(.*?)\s*(?:</task>|$)", re.DOTALL)
+
+
+def _clean_claude_text(text: str) -> str:
+    """One user message's text, or "" when it is harness noise."""
+    stripped = text.strip()
+    if not stripped or _is_claude_context_block(stripped):
+        return ""
+    if stripped.startswith("<task>"):
+        # Some harnesses wrap the actual ask in <task> tags.
+        match = _TASK_RE.match(stripped)
+        if match:
+            stripped = match.group(1).strip()
+    return stripped
+
+
+def _first_user_text(blocks) -> str:
+    """The first human-typed text in a list of message or content blocks."""
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        role = block.get("role")
+        if role and role != "user":
+            continue
+        if isinstance(block.get("text"), str):
+            text = _clean_claude_text(block["text"])
+            if text:
+                return text
+        elif "content" in block:
+            inner = block["content"]
+            if isinstance(inner, str):
+                text = _clean_claude_text(inner)
+            elif isinstance(inner, list):
+                text = _first_user_text(inner)
+            else:
+                text = ""
+            if text:
+                return text
+    return ""
+
+
+def _claude_user_text(content) -> str:
+    """Extract readable text from a user record's content field."""
+    if isinstance(content, list):
+        return _first_user_text(content)
+    if not isinstance(content, str):
+        return ""
+    stripped = content.strip()
+    if stripped.startswith(("[{", '{"')):
+        # Wrapper scripts sometimes log the whole message array as a string.
+        try:
+            decoded = json.loads(stripped)
+        except json.JSONDecodeError:
+            decoded = None
+        if isinstance(decoded, dict):
+            decoded = [decoded]
+        if isinstance(decoded, list):
+            return _first_user_text(decoded)
+    return _clean_claude_text(stripped)
+
+
+def _command_preview(content) -> str:
+    """A slash command as the user typed it, e.g. "/model opus"."""
+    if not isinstance(content, str):
+        return ""
+    name = _COMMAND_NAME_RE.search(content)
+    if not name:
+        return ""
+    args = _COMMAND_ARGS_RE.search(content)
+    arg_text = args.group(1).strip() if args else ""
+    return f"{name.group(1).strip()} {arg_text}".strip()
+
+
 def _get_meta_claude(path: Path) -> ConversationMeta | None:
     """Extract metadata from a Claude Code .jsonl."""
+    first: dict | None = None
+    slug = cwd = branch = fallback = preview = ""
     try:
         with open(path, encoding="utf-8") as f:
             for line in f:
-                rec = json.loads(line)
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
                 if rec.get("type") != "user":
                     continue
+                if first is None:
+                    first = rec
+                slug = slug or rec.get("slug", "")
+                cwd = cwd or rec.get("cwd", "")
+                branch = branch or rec.get("gitBranch", "")
                 content = rec.get("message", {}).get("content", "")
-                if isinstance(content, list) or not content or len(content.strip()) < 3:
-                    continue
-                preview = content.strip().replace("\n", " ")[:120]
-                return ConversationMeta(
-                    path=path,
-                    uuid=path.stem,
-                    slug=rec.get("slug", ""),
-                    timestamp=rec.get("timestamp", ""),
-                    cwd=rec.get("cwd", ""),
-                    preview=preview,
-                    git_branch=rec.get("gitBranch", ""),
-                )
-    except (json.JSONDecodeError, OSError):
-        pass
-    return None
+                text = _claude_user_text(content)
+                if len(text) >= 3:
+                    preview = text.replace("\n", " ")[:120]
+                    break
+                if not fallback:
+                    fallback = _command_preview(content)
+    except OSError:
+        return None
+    if first is None:
+        return None
+    return ConversationMeta(
+        path=path,
+        uuid=path.stem,
+        slug=slug,
+        timestamp=first.get("timestamp", ""),
+        cwd=cwd,
+        preview=preview or fallback,
+        git_branch=branch,
+    )
 
 
 def _get_meta_clihow(path: Path) -> ConversationMeta | None:
@@ -313,12 +402,13 @@ def _is_codex_context_block(text: str) -> bool:
         "<apps_instructions>",
         "<skills_instructions>",
         "<plugins_instructions>",
+        "<codex_internal_context",
     ))
 
 
 def _is_claude_context_block(text: str) -> bool:
     stripped = text.strip()
-    return stripped == "[Request interrupted by user]" or stripped.startswith((
+    return stripped.startswith("[Request interrupted by user") or stripped.startswith((
         "<local-command-",
         "<command-name>",
         "<command-message>",
@@ -409,7 +499,12 @@ def _get_meta_codex(path: Path) -> ConversationMeta | None:
 
                 if rtype == "event_msg" and payload.get("type") == "user_message" and preview_source != "event":
                     msg = payload.get("message", "")
-                    if isinstance(msg, str) and msg.strip() and len(msg.strip()) >= 3:
+                    if (
+                        isinstance(msg, str)
+                        and len(msg.strip()) >= 3
+                        and not _is_codex_context_block(msg)
+                        and not _is_claude_context_block(msg)
+                    ):
                         preview = msg.strip().replace("\n", " ")[:120]
                         preview_source = "event"
 

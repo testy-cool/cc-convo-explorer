@@ -10,7 +10,7 @@ from pathlib import Path
 from .parser import ConversationMeta, get_meta, list_opencode_metas
 
 _CACHE_PATH = Path(os.environ.get("USERPROFILE", Path.home())) / ".claude" / "convo-explorer" / "meta-cache.json"
-_CACHE_VERSION = 5
+_CACHE_VERSION = 6
 
 
 def _load_cache() -> dict:
