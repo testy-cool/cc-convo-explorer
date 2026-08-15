@@ -18,6 +18,13 @@ Without Gemini analysis: drop `[ai]`. Requires Python 3.12+.
 
 ## CLI
 
+<details>
+<summary>Every option, from <code>agentconvos --help</code></summary>
+
+<img src="assets/demo-help.png" alt="The full agentconvos --help output listing every command line option">
+
+</details>
+
 ### Project context (the fast path)
 
 ```bash
@@ -73,6 +80,8 @@ agentconvos --search "auth middleware"
 agentconvos --search 'auth "request id"'     # all words + an exact phrase
 agentconvos --search "auth" --source claude --json
 ```
+
+<img src="assets/demo-search.png" alt="agentconvos --search rate, listing matching turns with their date, session, turn number and role">
 
 Search is case-insensitive. Separate words use AND matching across a conversation,
 quoted text stays together as an exact phrase, and the strongest matches appear first.
@@ -202,6 +211,8 @@ stats = get_stats(projects[0].conversations[0].path)
 agentconvos
 ```
 
+<img src="assets/demo-tui.svg" alt="The agentconvos browser with a search running, matching conversations in the tree on the left and the selected transcript previewed on the right">
+
 Interactive tree grouped by agent/source (Claude Code, Codex, Pi, Agy, OpenCode,
 Clihow) with search, multi-select, preview, export, and Gemini analysis. The
 `R` action continues Clihow threads through `clihow ask --thread`; it keeps
@@ -254,16 +265,17 @@ uv run ruff check  # lint
 cd tui && go test ./...   # Go picker suite
 ```
 
-The README image is a real capture of `agentconvos --context`, taken with
-[termshot](https://github.com/homeport/termshot) against a synthetic archive so that no
-private conversation appears in it. To regenerate it:
+Every README image is a real capture of the program running against a synthetic
+archive, so no private conversation appears in any of them. Rebuild them all with:
 
 ```bash
-python scripts/make_demo_archive.py /tmp/demohome
-cd /tmp/demohome/work/checkout-service
-HOME=/tmp/demohome termshot --show-cmd --columns 112 \
-  --filename assets/demo.png -- agentconvos --context
+./scripts/make_readme_images.sh
 ```
+
+It needs [termshot](https://github.com/homeport/termshot) and tmux on your PATH.
+The command line images come from termshot. The browser image comes from Textual's
+own SVG export, because a full screen app redraws over itself and termshot would
+capture the whole session instead of the final screen.
 
 ## License
 
