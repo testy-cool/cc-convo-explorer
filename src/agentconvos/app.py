@@ -106,6 +106,16 @@ def _is_current_project(cwd: str, project_path: str) -> bool:
     return cwd == project_path
 
 
+def _short_path(path: str) -> str:
+    """Write a path under the home directory as ~/rest, the way the tree does."""
+    home = str(Path.home())
+    if path == home:
+        return "~"
+    if path.startswith(home + "/"):
+        return "~" + path[len(home):]
+    return path
+
+
 def _fmt_ts(ts: str, date_only: bool = False) -> str:
     """Format ISO timestamp: '2026-05-17 14:30' or '2026-05-17'."""
     if not ts:
@@ -2224,7 +2234,7 @@ def main() -> None:
             }, indent=2))
         else:
             label = "Context" if args.context else "Last"
-            print(f"\n{label} for {cwd} ({len(cwd_convos)} total):\n")
+            print(f"\n{label} for {_short_path(cwd)} ({len(cwd_convos)} total):\n")
             if args.context:
                 def _print_context_field(label: str, text: str) -> None:
                     prefix = f"    {label:<9}"

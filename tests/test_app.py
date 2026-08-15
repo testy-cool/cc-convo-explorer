@@ -1399,6 +1399,53 @@ class ContextCliTests(unittest.TestCase):
         self.assertIn("You:     Latest user follow-up", output)
         self.assertIn("Agent:   Latest agent response", output)
 
+    def test_context_header_shortens_the_home_directory(self):
+        """The header says ~/project, the way the browser already shows paths.
+        The JSON form keeps the absolute path for machines."""
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            root = home / "work" / "checkout-service"
+            root.mkdir(parents=True)
+            path = root / "codex.jsonl"
+            path.write_text("session", encoding="utf-8")
+            meta = ConversationMeta(
+                path=path,
+                uuid="codex-home",
+                slug="home-session",
+                timestamp="2026-08-03T10:00:00Z",
+                cwd=str(root),
+                preview="First request",
+                source="codex",
+            )
+            turns = [Turn("user", "First request"), Turn("assistant", "A reply")]
+
+            old_argv = sys.argv
+            old_cwd = Path.cwd()
+            sys.argv = ["agentconvos", "--context"]
+            stream = io.StringIO()
+            try:
+                os.chdir(root)
+                with (
+                    patch.dict(os.environ, {"HOME": str(home)}),
+                    patch("pathlib.Path.home", return_value=home),
+                    patch(
+                        "agentconvos.scanner.scan_projects",
+                        return_value=[Project("home", str(root), [meta])],
+                    ),
+                    patch("agentconvos.summarize.load_summaries", return_value={}),
+                    patch("agentconvos.app.parse_jsonl", return_value=turns),
+                    patch("agentconvos.app.get_stats", return_value=ConversationStats()),
+                    contextlib.redirect_stdout(stream),
+                ):
+                    main()
+            finally:
+                os.chdir(old_cwd)
+                sys.argv = old_argv
+
+        output = stream.getvalue()
+        self.assertIn("Context for ~/work/checkout-service", output)
+        self.assertNotIn(f"Context for {root}", output)
+
     def test_context_text_omits_last_user_when_it_matches_first(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
