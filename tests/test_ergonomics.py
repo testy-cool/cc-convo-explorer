@@ -9,7 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from textual.widgets import Input, Static
+from textual.widgets import Input, Static, Tree
 
 import agentconvos.app as app_module
 import agentconvos.parser as parser_module
@@ -612,6 +612,56 @@ class TuiErgonomicsTests(unittest.IsolatedAsyncioTestCase):
             tui._set_index_progress(stats)
             tui._index_finished(stats)
             tui._index_failed("boom")
+
+    async def test_arrow_keys_walk_results_from_the_search_box(self):
+        """↑/↓ must move the result cursor and preview it while the search box
+        keeps focus, and Enter must open the highlighted conversation."""
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp)
+            metas = [
+                _meta(cwd / "a.jsonl", "session-one", "2026-08-10T09:00:00", cwd),
+                _meta(cwd / "b.jsonl", "session-two", "2026-08-09T09:00:00", cwd),
+            ]
+            project = Project("tmp", str(cwd), metas)
+            previewed: list[str] = []
+
+            with patch("agentconvos.app.scan_projects", return_value=[project]):
+                tui = app_module.ConvoExplorer()
+                async with tui.run_test(size=(110, 36)) as pilot:
+                    tree = tui.query_one("#nav-tree", Tree)
+                    for _ in range(60):
+                        await pilot.pause(0.05)
+                        if tree.root.children:
+                            break
+                    tree.root.expand_all()
+                    await pilot.pause(0.1)
+
+                    search = tui.query_one("#filter-input", Input)
+                    self.assertTrue(search.has_focus)
+
+                    with patch.object(
+                        tui,
+                        "request_preview",
+                        side_effect=lambda meta, query="": previewed.append(meta.uuid),
+                    ):
+                        node = None
+                        for _ in range(8):
+                            await pilot.press("down")
+                            await pilot.pause(0.02)
+                            node = tree.cursor_node
+                            if node and node.data and node.data.kind == "convo":
+                                break
+
+                        self.assertTrue(search.has_focus, "arrows must not steal focus")
+                        self.assertIsNotNone(node.data, "cursor never reached a conversation")
+                        self.assertEqual(node.data.kind, "convo")
+                        self.assertIn(node.data.meta.uuid, previewed)
+
+                        await pilot.press("enter")
+                        await pilot.pause(0.05)
+
+                    self.assertEqual(tui.current_meta.uuid, node.data.meta.uuid)
+                    self.assertTrue(tree.has_focus, "Enter should hand focus to the tree")
 
     async def test_projects_order_by_recent_activity_not_alphabet(self):
         """With hundreds of projects, the active ones must sit on top; the

@@ -359,6 +359,25 @@ class _FilterResult:
     filtered_count: int
 
 
+class SearchInput(Input):
+    """The search box; arrow keys walk the result tree without leaving it."""
+
+    def _tree(self) -> Tree:
+        return self.app.query_one("#nav-tree", Tree)
+
+    def key_down(self) -> None:
+        self._tree().action_cursor_down()
+
+    def key_up(self) -> None:
+        self._tree().action_cursor_up()
+
+    def key_pagedown(self) -> None:
+        self._tree().action_page_down()
+
+    def key_pageup(self) -> None:
+        self._tree().action_page_up()
+
+
 class ConvoExplorer(App):
     CSS = """
     Screen {
@@ -509,7 +528,7 @@ class ConvoExplorer(App):
         with Horizontal(id="main"):
             with Vertical(id="sidebar"):
                 yield Static("HISTORY", classes="panel-title", id="left-title")
-                yield Input(
+                yield SearchInput(
                     placeholder="Search conversations…",
                     id="filter-input",
                 )
@@ -1007,6 +1026,16 @@ History appears immediately. Full-text results arrive live while indexing runs i
             return
 
         if data.kind == "convo" and data.meta:
+            self.current_meta = data.meta
+            query = self.query_one("#filter-input", Input).value.strip()
+            self.request_preview(data.meta, query)
+
+    def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
+        """Preview a conversation as soon as the cursor lands on it."""
+        data: NodeData | None = event.node.data
+        if data and data.kind == "convo" and data.meta:
+            if self.current_meta is data.meta:
+                return
             self.current_meta = data.meta
             query = self.query_one("#filter-input", Input).value.strip()
             self.request_preview(data.meta, query)
@@ -1594,24 +1623,37 @@ History appears immediately. Full-text results arrive live while indexing runs i
         filt.focus()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        if event.input.id == "filter-input" and event.value.strip():
-            tree = self.query_one("#nav-tree", Tree)
-            first_match = next(
-                (
-                    node
-                    for node in self._walk_tree_nodes(tree.root)
-                    if node.data and node.data.kind == "convo"
-                ),
-                None,
-            )
-            if first_match is None:
-                self.notify("No matching conversations", severity="warning")
-                return
-            tree.select_node(first_match)
+        if event.input.id != "filter-input":
+            return
+        tree = self.query_one("#nav-tree", Tree)
+
+        # If the user arrowed down to a conversation, open that one.
+        cursor = tree.cursor_node
+        if cursor and cursor.data and cursor.data.kind == "convo" and cursor.data.meta:
+            tree.select_node(cursor)
             tree.focus()
-            if first_match.data.meta:
-                self.current_meta = first_match.data.meta
-                self.request_preview(first_match.data.meta, event.value.strip())
+            self.current_meta = cursor.data.meta
+            self.request_preview(cursor.data.meta, event.value.strip())
+            return
+
+        if not event.value.strip():
+            return
+        first_match = next(
+            (
+                node
+                for node in self._walk_tree_nodes(tree.root)
+                if node.data and node.data.kind == "convo"
+            ),
+            None,
+        )
+        if first_match is None:
+            self.notify("No matching conversations", severity="warning")
+            return
+        tree.select_node(first_match)
+        tree.focus()
+        if first_match.data.meta:
+            self.current_meta = first_match.data.meta
+            self.request_preview(first_match.data.meta, event.value.strip())
 
     def action_cancel(self) -> None:
         if self._analyzing:
