@@ -2,7 +2,9 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+import agentconvos.search_index as search_index_module
 from agentconvos.parser import ConversationMeta, Turn, conversation_signature
 
 
@@ -17,6 +19,19 @@ def _meta(path: Path, uuid: str = "session-one") -> ConversationMeta:
         source="codex",
         git_branch="fix/request-id",
     )
+
+
+class DefaultIndexPathTests(unittest.TestCase):
+    def test_default_path_is_resolved_when_the_index_is_built(self):
+        """Binding the default at import time makes the real index impossible
+        to redirect, so anything constructing an index with no argument writes
+        to the developer's own archive."""
+        with tempfile.TemporaryDirectory() as tmp:
+            redirected = Path(tmp) / "search-index.sqlite3"
+            with patch.object(search_index_module, "DEFAULT_INDEX_PATH", redirected):
+                index = search_index_module.ConversationSearchIndex()
+
+            self.assertEqual(index.path, redirected)
 
 
 class ConversationSearchIndexTests(unittest.TestCase):

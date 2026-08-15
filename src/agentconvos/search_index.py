@@ -34,8 +34,11 @@ class IndexSyncStats:
 class ConversationSearchIndex:
     """SQLite FTS5 index keyed by transcript path, size, and mtime."""
 
-    def __init__(self, path: Path = DEFAULT_INDEX_PATH) -> None:
-        self.path = Path(path)
+    def __init__(self, path: Path | None = None) -> None:
+        # Resolved here rather than bound at import, so the location can be
+        # redirected. Tests that sync a handful of fixtures against the real
+        # index delete every conversation missing from their fixture list.
+        self.path = Path(path) if path is not None else Path(DEFAULT_INDEX_PATH)
 
     def _connect(self) -> sqlite3.Connection:
         self.path.parent.mkdir(parents=True, exist_ok=True)
