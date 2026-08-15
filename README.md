@@ -196,6 +196,20 @@ agentconvos --analyze <id> --prompt "What tools were used most?"
 Transcript output includes normalized indexed turns plus source, path, UUID, cwd,
 size, and modification metadata.
 
+## Use it from your coding agent
+
+The archive is most useful to the agent that has no memory of it. `skills/agentconvos/`
+is a skill that teaches one when to reach for this and which command answers which
+kind of question, so it can catch up on a repo or find a past decision instead of
+asking you to repeat yourself.
+
+```bash
+ln -s "$PWD/skills/agentconvos" ~/.claude/skills/agentconvos
+```
+
+It is a plain markdown file, so agents that read `AGENTS.md` or similar can be
+pointed at it directly.
+
 ## Library API
 
 ```python
