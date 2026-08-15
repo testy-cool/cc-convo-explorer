@@ -8,10 +8,12 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import agentconvos.parser as parser_module
 import agentconvos.scanner as scanner_module
+import agentconvos.search_index as search_index_module
 from agentconvos.app import _handoff_agent, _handoff_cmd, _resume_cmd, main
 from agentconvos.parser import (
     ConversationMeta,
@@ -349,6 +351,64 @@ class CodexParserTests(unittest.TestCase):
                 ("assistant", "Here is the actual context."),
             ],
         )
+
+    def test_detail_modes_include_newer_custom_tool_calls(self):
+        """Codex now logs shell work as custom_tool_call. Ignoring it makes
+        --detail tools/full return the same text as the default, so a session
+        with tool activity looks like one that had none."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "rollout-custom.jsonl"
+            records = [
+                {
+                    "type": "session_meta",
+                    "payload": {
+                        "id": "custom-session",
+                        "timestamp": "2026-08-15T10:00:00Z",
+                        "cwd": str(path.parent),
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "user_message", "message": "check the diff"},
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "custom_tool_call",
+                        "call_id": "call_abc",
+                        "name": "exec",
+                        "input": 'const r = await tools.exec_command({cmd: "git diff"});',
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "custom_tool_call_output",
+                        "call_id": "call_abc",
+                        "output": [
+                            {"type": "input_text", "text": "Script completed"},
+                            {"type": "input_text", "text": "2 files changed"},
+                        ],
+                    },
+                },
+            ]
+            path.write_text(
+                "\n".join(json.dumps(record) for record in records),
+                encoding="utf-8",
+            )
+
+            text_only = parse_jsonl(path)
+            with_tools = parse_jsonl(path, detail="tools")
+            with_results = parse_jsonl(path, detail="full")
+
+        self.assertNotIn("exec", "\n".join(t.text for t in text_only))
+
+        tools_text = "\n".join(t.text for t in with_tools)
+        self.assertIn("exec", tools_text)
+        self.assertIn("git diff", tools_text)
+
+        results_text = "\n".join(t.text for t in with_results)
+        self.assertIn("2 files changed", results_text)
 
     def test_subagent_metadata_keeps_its_own_first_session_id(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1342,7 +1402,7 @@ class SearchCliTests(unittest.TestCase):
                 def sync(self, conversations, **_kwargs):
                     self.synced = list(conversations)
 
-                def search_hits(self, query, conversations):
+                def search_hits(self, query, conversations, limit=50):
                     self.searched = (query, list(conversations))
                     return []
 
@@ -1373,6 +1433,86 @@ class SearchCliTests(unittest.TestCase):
         self.assertEqual(FakeIndex.instance.searched, ("result", [codex]))
         self.assertEqual(json.loads(stream.getvalue())["total_searched"], 1)
 
+    def test_search_says_when_it_is_showing_only_the_top_results(self):
+        """Results are capped. Printing the cap as a count reads as a total,
+        so a caller concludes the archive holds exactly that many matches."""
+        hits = [
+            SimpleNamespace(
+                meta=ConversationMeta(
+                    path=Path(f"/tmp/s{index}.jsonl"),
+                    uuid=f"uuid-{index}",
+                    slug="",
+                    timestamp="2026-08-01T10:00:00",
+                    cwd="/tmp",
+                    preview="p",
+                    source="codex",
+                ),
+                turn_index=index,
+                role="user",
+                snippet="rate limit",
+            )
+            for index in range(50)
+        ]
+
+        old_argv = sys.argv
+        sys.argv = ["agentconvos", "--search", "rate limit", "--limit", "50"]
+        stream = io.StringIO()
+        try:
+            with (
+                patch("agentconvos.scanner.scan_projects", return_value=[]),
+                patch.object(
+                    search_index_module.ConversationSearchIndex,
+                    "search_hits",
+                    return_value=hits,
+                ),
+                patch.object(
+                    search_index_module.ConversationSearchIndex,
+                    "sync",
+                    return_value=SimpleNamespace(
+                        total=0, checked=0, indexed=0, unchanged=0, removed=0, failed=0
+                    ),
+                ),
+                contextlib.redirect_stdout(stream),
+            ):
+                main()
+        finally:
+            sys.argv = old_argv
+
+        output = stream.getvalue()
+        self.assertNotIn("50 matches found.", output)
+        self.assertIn("top 50", output)
+        self.assertIn("--limit", output)
+
+    def test_search_json_reports_whether_results_were_capped(self):
+        old_argv = sys.argv
+        sys.argv = ["agentconvos", "--search", "rate limit", "--json"]
+        stream = io.StringIO()
+        try:
+            with (
+                patch("agentconvos.scanner.scan_projects", return_value=[]),
+                patch.object(
+                    search_index_module.ConversationSearchIndex,
+                    "search_hits",
+                    return_value=[],
+                ),
+                patch.object(
+                    search_index_module.ConversationSearchIndex,
+                    "sync",
+                    return_value=SimpleNamespace(
+                        total=0, checked=0, indexed=0, unchanged=0, removed=0, failed=0
+                    ),
+                ),
+                contextlib.redirect_stdout(stream),
+            ):
+                main()
+        finally:
+            sys.argv = old_argv
+
+        payload = json.loads(stream.getvalue())
+        self.assertIn("limit", payload)
+        self.assertIn("truncated", payload)
+        self.assertFalse(payload["truncated"])
+
     def test_cli_search_uses_the_persistent_turn_index(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "session.jsonl"
@@ -1400,7 +1540,7 @@ class SearchCliTests(unittest.TestCase):
                 def sync(self, conversations, **_kwargs):
                     self.synced = list(conversations)
 
-                def search_hits(self, query, conversations):
+                def search_hits(self, query, conversations, limit=50):
                     self.searched = (query, list(conversations))
                     return [hit]
 

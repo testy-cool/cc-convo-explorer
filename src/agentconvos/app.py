@@ -2237,6 +2237,13 @@ def main() -> None:
         help="Search conversation text using AND terms and quoted phrases",
     )
     parser.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        metavar="N",
+        help="Maximum search results to return (default: 50)",
+    )
+    parser.add_argument(
         "-f",
         "--find",
         nargs="?",
@@ -2413,12 +2420,18 @@ def main() -> None:
                 f" ({sync_result.failed} failed).{' ' * 20}",
                 file=_sys.stderr,
             )
-        hits = search_index.search_hits(args.search, all_conversations)
+        limit = max(1, args.limit)
+        hits = search_index.search_hits(args.search, all_conversations, limit=limit)
+        # A full page means there are probably more; saying so beats printing
+        # the cap as though it were the number of matches in the archive.
+        truncated = len(hits) >= limit
         if args.json:
             import json as _json
             print(_json.dumps({
                 "query": args.search,
                 "total_searched": len(all_conversations),
+                "limit": limit,
+                "truncated": truncated,
                 "hits": [
                     {
                         "uuid": h.meta.uuid,
@@ -2443,7 +2456,13 @@ def main() -> None:
                     slug_part = f"  {hit.meta.slug}" if hit.meta.slug else ""
                     ts = hit.meta.timestamp[:10] if hit.meta.timestamp else "?"
                     print(f"  {ts}  {hit.meta.uuid}{slug_part}  turn {hit.turn_index+1:3d} ({hit.role:9s})  {hit.snippet}")
-                print(f"\n{len(hits)} matches found.")
+                if truncated:
+                    print(
+                        f"\nShowing the top {len(hits)} matches. "
+                        f"There may be more; raise --limit to see them."
+                    )
+                else:
+                    print(f"\n{len(hits)} matches found.")
         return
 
     if args.last is not None or args.context:
