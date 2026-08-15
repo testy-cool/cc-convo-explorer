@@ -93,7 +93,9 @@ agentconvos --search "auth" --source claude --json
 <img src="assets/demo-search.png" alt="agentconvos --search rate, listing matching turns with their date, session, turn number and role">
 
 Search is case-insensitive. Separate words use AND matching across a conversation,
-quoted text stays together as an exact phrase, and the strongest matches appear first.
+quoted text is matched as a phrase, and the strongest matches appear first. Results
+are ranked and capped at `--limit` (50 by default); the output says when it is
+showing only the top matches rather than all of them.
 CLI results come from a persistent turn-level SQLite index, so each hit includes the
 original role and turn number without reparsing every transcript. Existing indexes
 receive a one-time turn backfill on the first search; a large archive can take several

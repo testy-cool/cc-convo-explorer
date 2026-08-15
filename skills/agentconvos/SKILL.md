@@ -50,15 +50,24 @@ empty, the work simply was not done in this directory.
 
 ```bash
 agentconvos --search "auth middleware"          # all words, anywhere in a conversation
-agentconvos --search 'auth "request id"'        # quoted text stays an exact phrase
+agentconvos --search 'auth "request id"'        # quoted text is matched as a phrase
 agentconvos --search "auth" --source codex --json
 ```
+
+Quoting narrows a lot: unquoted `rate limit` finds thousands of conversations,
+`"rate limit"` a few dozen. It is a ranked phrase match rather than a literal
+grep, so a hit can occasionally be a near miss like "rate limiting". Read the
+turn before quoting it back to the user as an exact match.
 
 Search is case-insensitive and ranked, and runs against a local SQLite index,
 so it is fast even over thousands of sessions. JSON hits carry `uuid`,
 `source`, `timestamp`, `cwd`, `file`, `turn_index`, `role`, and `snippet` -
-enough to cite a specific turn without opening the transcript. `turn_index`
-lines up with the positions in `--turns` output.
+enough to cite a specific turn without opening the transcript. `turn_index` is
+zero-based and lines up with the positions in default `--turns` output; the
+human-readable listing prints the same turn as `turn 1`, and asking for
+`--detail tools` shifts positions because tool-only turns appear. Cite from
+JSON. `total_searched` is how many conversations were scanned, not how many
+matched.
 
 **Results are capped at 50 by default.** A broad query hits that cap easily,
 so never report the number of results as the number of matches in the archive.
@@ -140,12 +149,19 @@ Conversation archives hold whatever the user has ever pasted into an agent:
 credentials, customer data, unreleased work. Do not run these on someone's
 archive without telling them what leaves the machine.
 
+## Commands that write files
+
 Two commands write plaintext copies of conversations to disk rather than
-returning them to you. `--concat` saves a combined markdown file under
-`~/.claude/convo-explorer/exports/` and prints only the path. `--handoff`
-writes one into `output/` in the current directory, and does so even with
-`--dry-run`, which suppresses launching the agent but not the export. Neither
-puts the transcript on stdout, so do not reach for them to *read* a
+returning them to you. Nothing leaves the machine, but a new readable copy of
+a private transcript now exists where there was not one before.
+
+- `--concat` saves a combined markdown file under
+  `~/.claude/convo-explorer/exports/` and prints only the path
+- `--handoff` writes one into `output/` in the current directory, and does so
+  even with `--dry-run`, which suppresses launching the agent but not the
+  export
+
+Neither puts the transcript on stdout, so do not reach for them to *read* a
 conversation; use `--turns` for that.
 
 ## Identifiers
