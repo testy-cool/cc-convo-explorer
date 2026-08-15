@@ -1512,6 +1512,60 @@ class ContextCliTests(unittest.TestCase):
         self.assertIn("You:     Latest user follow-up", output)
         self.assertIn("Agent:   Latest agent response", output)
 
+    def test_context_wraps_long_messages_under_their_label(self):
+        """A long message wrapped by the terminal restarts at column zero and
+        breaks the label columns, so it is wrapped with a hanging indent."""
+        long_message = (
+            "Add rate limiting to the public API. Per API key, not per IP, "
+            "because most of our traffic comes through two proxies and they "
+            "share a handful of addresses between every customer we have."
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "codex.jsonl"
+            path.write_text("session", encoding="utf-8")
+            meta = ConversationMeta(
+                path=path,
+                uuid="codex-wrap",
+                slug="wrap-session",
+                timestamp="2026-08-03T10:00:00Z",
+                cwd=str(root),
+                preview=long_message,
+                source="codex",
+            )
+            turns = [Turn("user", long_message), Turn("assistant", "Fine.")]
+
+            old_argv = sys.argv
+            old_cwd = Path.cwd()
+            sys.argv = ["agentconvos", "--context"]
+            stream = io.StringIO()
+            try:
+                os.chdir(root)
+                with (
+                    patch(
+                        "agentconvos.scanner.scan_projects",
+                        return_value=[Project("context", str(root), [meta])],
+                    ),
+                    patch("agentconvos.summarize.load_summaries", return_value={}),
+                    patch("agentconvos.app.parse_jsonl", return_value=turns),
+                    patch("agentconvos.app.get_stats", return_value=ConversationStats()),
+                    patch("shutil.get_terminal_size", return_value=os.terminal_size((100, 24))),
+                    contextlib.redirect_stdout(stream),
+                ):
+                    main()
+            finally:
+                os.chdir(old_cwd)
+                sys.argv = old_argv
+
+        lines = stream.getvalue().splitlines()
+        body = [line for line in lines if line.strip()]
+        self.assertTrue(
+            all(len(line) <= 100 for line in body),
+            f"a line exceeded the terminal width: {[x for x in body if len(x) > 100]}",
+        )
+        wrapped = [line for line in lines if line.startswith(" " * 13) and "proxies" in line]
+        self.assertTrue(wrapped, f"continuation was not indented under the label: {lines}")
+
     def test_context_header_shortens_the_home_directory(self):
         """The header says ~/project, the way the browser already shows paths.
         The JSON form keeps the absolute path for machines."""

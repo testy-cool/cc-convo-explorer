@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
+import textwrap
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -2476,11 +2478,27 @@ def main() -> None:
             label = "Context" if args.context else "Last"
             print(f"\n{label} for {_short_path(cwd)} ({len(cwd_convos)} total):\n")
             if args.context:
+                width = max(60, shutil.get_terminal_size((100, 24)).columns)
+
                 def _print_context_field(label: str, text: str) -> None:
                     prefix = f"    {label:<9}"
                     continuation = " " * len(prefix)
                     complete = text or "(none)"
-                    print(prefix + complete.replace("\n", "\n" + continuation))
+                    # Wrapping at the terminal edge restarts at column zero and
+                    # breaks the label columns, so wrap under the label instead.
+                    for index, paragraph in enumerate(complete.split("\n")):
+                        wrapped = textwrap.wrap(
+                            paragraph,
+                            width=width,
+                            initial_indent=prefix if index == 0 else continuation,
+                            subsequent_indent=continuation,
+                            # A long unbroken token is left whole. Splitting it
+                            # would corrupt an id or a path someone copies out.
+                            break_long_words=False,
+                            break_on_hyphens=False,
+                        ) or [(prefix if index == 0 else continuation).rstrip()]
+                        for line in wrapped:
+                            print(line)
 
                 for record in records:
                     name = record["slug"] or record["uuid"][:8]
