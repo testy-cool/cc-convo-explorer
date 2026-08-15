@@ -6,7 +6,7 @@ Discover, query, and browse AI coding agent conversations. Works with Claude Cod
 
 Use as a **CLI** (`agentconvos --context --json`), a **Python library** (`from agentconvos import scan_projects`), or an **interactive TUI** (`agentconvos`).
 
-<img src="assets/demo.svg" alt="agentconvos demo">
+<img src="assets/demo.png" alt="agentconvos --context showing recent Claude Code and Codex sessions for a project">
 
 ## Install
 
@@ -252,6 +252,17 @@ uv sync            # installs the package plus pytest and ruff
 uv run pytest      # full Python suite (~3 min, includes Textual timing tests)
 uv run ruff check  # lint
 cd tui && go test ./...   # Go picker suite
+```
+
+The README image is a real capture of `agentconvos --context`, taken with
+[termshot](https://github.com/homeport/termshot) against a synthetic archive so that no
+private conversation appears in it. To regenerate it:
+
+```bash
+python scripts/make_demo_archive.py /tmp/demohome
+cd /tmp/demohome/work/checkout-service
+HOME=/tmp/demohome termshot --show-cmd --columns 112 \
+  --filename assets/demo.png -- agentconvos --context
 ```
 
 ## License
