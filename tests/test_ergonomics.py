@@ -613,6 +613,49 @@ class TuiErgonomicsTests(unittest.IsolatedAsyncioTestCase):
             tui._index_finished(stats)
             tui._index_failed("boom")
 
+    async def test_full_transcript_is_readable_without_leaving_the_browser(self):
+        """The preview shows a tail; v must open the whole conversation, and
+        the header must say how much is on screen either way."""
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path(tmp)
+            meta = _meta(cwd / "long.jsonl", "long-session", "2026-08-10T09:00:00", cwd)
+            turns = [
+                Turn("user" if index % 2 == 0 else "assistant", f"turn number {index}")
+                for index in range(40)
+            ]
+            captured: list[str] = []
+
+            with patch("agentconvos.app.scan_projects", return_value=[]):
+                tui = app_module.ConvoExplorer()
+                async with tui.run_test(size=(110, 36)) as pilot:
+                    with (
+                        patch("agentconvos.app.parse_jsonl", return_value=turns),
+                        patch.object(
+                            tui, "_set_preview",
+                            side_effect=lambda md, *a, **k: captured.append(md),
+                        ),
+                    ):
+                        tui.current_meta = meta
+                        tui.request_preview(meta)
+                        for _ in range(60):
+                            await pilot.pause(0.05)
+                            if captured:
+                                break
+
+                        self.assertTrue(captured, "preview was never rendered")
+                        self.assertIn("showing last 10 of 40 · press v for all", captured[0])
+                        self.assertNotIn("turn number 0", captured[0])
+
+                        tui.action_view_full()
+                        for _ in range(60):
+                            await pilot.pause(0.05)
+                            if len(captured) > 1:
+                                break
+
+            self.assertGreater(len(captured), 1, "full transcript was never rendered")
+            self.assertIn("turn number 0", captured[-1])
+            self.assertIn("turn number 39", captured[-1])
+
     def test_footer_leads_with_the_flagship_actions(self):
         """Resume, handoff and search must be visible in the footer instead of
         being crowded out by bulk-action keys; the rest lives behind ?."""
@@ -621,7 +664,7 @@ class TuiErgonomicsTests(unittest.IsolatedAsyncioTestCase):
             for binding in app_module.ConvoExplorer.BINDINGS
             if getattr(binding, "show", True)
         ]
-        self.assertEqual(shown[:6], ["slash", "r", "h", "e", "a", "s"])
+        self.assertEqual(shown[:6], ["slash", "v", "r", "h", "e", "a"])
         self.assertIn("question_mark", shown)
 
     async def test_help_overlay_opens_from_the_tree_but_not_the_search_box(self):

@@ -348,6 +348,7 @@ class HelpScreen(ModalScreen[None]):
     KEYS: list[tuple[str, str]] = [
         ("/", "Search; ↑ ↓ walk the results while typing"),
         ("Enter", "Open the highlighted conversation"),
+        ("v", "Read the whole transcript, not just the tail"),
         ("Tab", "Switch panel"),
         ("r", "Resume the session in its agent"),
         ("h", "Handoff into a new session"),
@@ -519,6 +520,7 @@ class ConvoExplorer(App):
     # The flagship actions come first, the bulk keys live behind "?".
     BINDINGS = [
         Binding("slash", "search", "Search", priority=False),
+        Binding("v", "view_full", "Full text", priority=False),
         Binding("r", "resume", "Resume", priority=False),
         Binding("h", "handoff", "Handoff", priority=False),
         Binding("e", "export", "Export", priority=False),
@@ -1090,15 +1092,19 @@ History appears immediately. Full-text results arrive live while indexing runs i
             query = self.query_one("#filter-input", Input).value.strip()
             self.request_preview(data.meta, query)
 
-    def request_preview(self, meta: ConversationMeta, query: str = "") -> None:
+    def request_preview(
+        self, meta: ConversationMeta, query: str = "", *, full: bool = False
+    ) -> None:
         preview_scroll = self.query_one("#preview-scroll", VerticalScroll)
         preview_scroll.loading = True
         name = meta.slug or meta.uuid[:8]
         self.query_one("#right-title", Static).update(f"LOADING · {name}")
-        self.load_preview(meta, query)
+        self.load_preview(meta, query, full=full)
 
     @work(thread=True, exclusive=True, group="preview")
-    def load_preview(self, meta: ConversationMeta, query: str = "") -> None:
+    def load_preview(
+        self, meta: ConversationMeta, query: str = "", *, full: bool = False
+    ) -> None:
         worker = get_current_worker()
         try:
             turns = parse_jsonl(meta.path)
@@ -1114,7 +1120,7 @@ History appears immediately. Full-text results arrive live while indexing runs i
         if worker.is_cancelled:
             return
         meta.turn_count = len(turns)
-        terms = parse_search_terms(query)
+        terms = parse_search_terms(query) if not full else []
 
         if terms:
             phrase = " ".join(terms)
@@ -1163,18 +1169,23 @@ History appears immediately. Full-text results arrive live while indexing runs i
                     )
                 return
 
-        # Show last 10 turns for quick preview
-        tail = turns[-10:] if len(turns) > 10 else turns
+        # A tail keeps browsing fast; v renders the whole transcript.
+        tail = turns if full or len(turns) <= 10 else turns[-10:]
         md = to_markdown(tail)
         skipped = len(turns) - len(tail)
         title = _highlight_markdown(meta.slug or meta.uuid, terms)
         cwd = _highlight_markdown(_short_path(meta.cwd) if meta.cwd else "(unknown)", terms)
-        header = f"## {title}\n**Date:** {meta.timestamp[:19]}  \n**CWD:** {cwd}  \n**Session ID:** `{meta.uuid}`  \n**Turns:** {len(turns)} total"
+        header = f"## {title}\n**Date:** {_fmt_ts(meta.timestamp)}  \n**CWD:** {cwd}  \n**Session ID:** `{meta.uuid}`  \n**Turns:** {len(turns)} total"
         if skipped:
-            header += f" (showing last {len(tail)})"
+            header += f" (showing last {len(tail)} of {len(turns)} · press v for all)"
         header += "\n\n---\n\n"
         if not worker.is_cancelled:
-            self.call_from_thread(self._set_preview, header + md, len(turns))
+            self.call_from_thread(
+                self._set_preview,
+                header + md,
+                len(turns),
+                f"FULL TRANSCRIPT · {len(turns)} turns" if full else None,
+            )
 
     def _set_preview(self, md: str, turn_count: int, title: str | None = None) -> None:
         self.query_one("#preview", Markdown).update(md)
@@ -1674,6 +1685,13 @@ History appears immediately. Full-text results arrive live while indexing runs i
 
     def action_help(self) -> None:
         self.push_screen(HelpScreen())
+
+    def action_view_full(self) -> None:
+        """Render the whole conversation, not just the tail or the matches."""
+        if not self.current_meta:
+            self.notify("Pick a conversation first", severity="warning")
+            return
+        self.request_preview(self.current_meta, full=True)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id != "filter-input":
