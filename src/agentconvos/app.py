@@ -137,7 +137,9 @@ def _stats_line(path: Path) -> str:
     """Model and token cost for the preview header, empty when unavailable."""
     try:
         stats: ConversationStats = get_stats(path)
-    except (OSError, ValueError):
+    except Exception:
+        # The header is a nicety; a transcript it cannot summarize must not
+        # take the transcript itself off the screen.
         return ""
     parts = []
     if stats.model:
@@ -626,6 +628,7 @@ class ConvoExplorer(App):
         self._tree_width = 0
         self._width_timer = None
         self._highlight_timer = None
+        self._previewed_meta: ConversationMeta | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -1169,14 +1172,19 @@ History appears immediately. Full-text results arrive live while indexing runs i
             return
 
         if data.kind == "convo" and data.meta:
+            self._cancel_highlight_preview()
             self.current_meta = data.meta
+            if self._previewed_meta is data.meta:
+                return  # already on screen; opening it again would reparse it
             query = self.query_one("#filter-input", Input).value.strip()
             self.request_preview(data.meta, query)
         elif data.kind == "project" and data.project:
+            self._cancel_highlight_preview()
             self._show_project_digest(data.project)
 
     def _show_project_digest(self, project: Project) -> None:
         """Summarize a project so its row does not leave a stale transcript up."""
+        self._previewed_meta = None
         convos = project.conversations
         lines = [
             f"## {_short_path(project.display_path)}",
@@ -1201,17 +1209,30 @@ History appears immediately. Full-text results arrive live while indexing runs i
         the cursor stops moving.
         """
         data: NodeData | None = event.node.data
-        if not data or data.kind != "convo" or not data.meta:
+        if not data:
             return
-        if self.current_meta is data.meta:
+        if data.kind == "project" and data.project:
+            # Cheap: the digest reads cached metadata, no transcripts.
+            self._cancel_highlight_preview()
+            self._show_project_digest(data.project)
+            return
+        if data.kind != "convo" or not data.meta:
             return
         self.current_meta = data.meta
-        if self._highlight_timer is not None:
-            self._highlight_timer.stop()
+        # Compare against what is on screen, not what is selected: a project
+        # row replaces the transcript, so coming back needs a fresh render.
+        if self._previewed_meta is data.meta:
+            return
+        self._cancel_highlight_preview()
         self._highlight_timer = self.set_timer(
             _HIGHLIGHT_DEBOUNCE_SECONDS,
             lambda meta=data.meta: self._preview_highlighted(meta),
         )
+
+    def _cancel_highlight_preview(self) -> None:
+        if self._highlight_timer is not None:
+            self._highlight_timer.stop()
+            self._highlight_timer = None
 
     def _preview_highlighted(self, meta: ConversationMeta) -> None:
         self._highlight_timer = None
@@ -1225,6 +1246,7 @@ History appears immediately. Full-text results arrive live while indexing runs i
     ) -> None:
         preview_scroll = self.query_one("#preview-scroll", VerticalScroll)
         preview_scroll.loading = True
+        self._previewed_meta = meta
         name = meta.slug or meta.uuid[:8]
         self.query_one("#right-title", Static).update(f"LOADING · {name}")
         self.load_preview(meta, query, full=full)

@@ -214,6 +214,10 @@ def _first_user_text(blocks) -> str:
         role = block.get("role")
         if role and role != "user":
             continue
+        # tool_result and friends are the harness reporting back, not a person
+        # typing, so they must not become the name of a conversation.
+        if block.get("type") not in (None, "text", "message"):
+            continue
         if isinstance(block.get("text"), str):
             text = _clean_claude_text(block["text"])
             if text:
@@ -1733,7 +1737,9 @@ def _get_stats_claude(path: Path) -> ConversationStats:
                     stats.model = msg.get("model", "")
                 if not stats.effort:
                     stats.effort = str(rec.get("effort", "") or "")
-                usage = msg.get("usage", {}) if isinstance(msg, dict) else {}
+                usage = msg.get("usage") if isinstance(msg, dict) else None
+                if not isinstance(usage, dict):
+                    usage = {}
                 stats.input_tokens += usage.get("input_tokens", 0)
                 stats.output_tokens += usage.get("output_tokens", 0)
                 stats.cache_read_tokens += usage.get("cache_read_input_tokens", 0)

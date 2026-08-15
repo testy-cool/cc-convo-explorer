@@ -690,6 +690,35 @@ class ClaudeParserTests(unittest.TestCase):
                 self.assertIsNotNone(meta, f"shape {index} lost the conversation")
                 self.assertEqual(meta.preview, expected)
 
+    def test_meta_preview_ignores_tool_results(self):
+        """A tool result is the harness talking back, not the user, and using
+        it as the title is the same fault as showing command wrappers."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self._write_session(tmp, [
+                {
+                    "type": "user",
+                    "timestamp": "2026-08-01T10:00:00",
+                    "message": {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "content": "exit code 0, 412 files changed",
+                            }
+                        ],
+                    },
+                },
+                {
+                    "type": "user",
+                    "timestamp": "2026-08-01T10:05:00",
+                    "message": {"role": "user", "content": "the question I typed"},
+                },
+            ])
+
+            meta = get_meta(path)
+
+        self.assertEqual(meta.preview, "the question I typed")
+
     def test_meta_preview_reads_list_content_blocks(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = self._write_session(tmp, [
