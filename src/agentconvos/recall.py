@@ -185,9 +185,14 @@ class _RecallProgress:
         question: str,
         *,
         clock: Callable[[], float] = time.monotonic,
+        streams_progress: bool = True,
     ) -> None:
         self.question = question
         self._clock = clock
+        # Some backends hand back one final payload instead of a stream of
+        # retrieval events. Their panel must not display counters that can
+        # only ever read zero.
+        self.streams_progress = streams_progress
         self.started_at = clock()
         self.stage = 0
         self.searches = 0
@@ -301,12 +306,17 @@ class _RecallProgress:
             f"CONVERSATION RECALL  {self.elapsed}",
             f"QUESTION  {self.question}",
             f"STAGE  {status}",
-            (
-                f"SEARCHES  {self.searches}    CANDIDATES  {self.candidates}    "
-                f"SESSIONS  {len(self.sessions)}    INSPECTED  {len(self.inspected)}"
-            ),
-            f"WORKER ACTIVITY  {self.activity}    {self.latest}",
         ]
+        if self.streams_progress:
+            lines.extend((
+                (
+                    f"SEARCHES  {self.searches}    CANDIDATES  {self.candidates}    "
+                    f"SESSIONS  {len(self.sessions)}    INSPECTED  {len(self.inspected)}"
+                ),
+                f"WORKER ACTIVITY  {self.activity}    {self.latest}",
+            ))
+        else:
+            lines.append(f"WORKER  {self.latest}")
         if self.final_session or self.final_path:
             match = self.final_session or "Matched conversation"
             if self.final_path:
@@ -328,6 +338,9 @@ class _RecallProgress:
             Text(f"INSPECTED\n{len(self.inspected)}", style="bold yellow"),
         )
 
+        if not self.streams_progress:
+            return self._opaque_panel(header)
+
         stages = Table.grid(padding=(0, 1))
         stages.add_column(width=2)
         stages.add_column()
@@ -347,6 +360,34 @@ class _RecallProgress:
         content: list[RenderableType] = [header, Text(""), stats, Text(""), stages, Text(""), footer]
         if self.archive_size:
             content.append(Text(f"ARCHIVE  {self.archive_size:,} conversations checked", style="dim"))
+        if self.final_session or self.final_path:
+            match = Text("MATCH  ", style="bold green")
+            match.append(self.final_session or "Conversation located", style="bold white")
+            if self.final_path:
+                match.append(f"  ·  {Path(self.final_path).name}", style="cyan")
+            content.extend((Text(""), match))
+        return Panel(
+            Group(*content),
+            title="[bold cyan]CONVERSATION RECALL[/]",
+            subtitle=f"[dim]{self.elapsed}[/]",
+            border_style="cyan" if self.succeeded is None else "green",
+            box=box.ROUNDED,
+            padding=(1, 2),
+        )
+
+    def _opaque_panel(self, header: Text) -> RenderableType:
+        """What can honestly be shown for a backend that reports only at the end."""
+        status = Text()
+        status.append("WORKER  ", style="dim")
+        if self.succeeded is None:
+            status.append("SEARCHING", style="bold cyan")
+            status.append("  ·  the archive is being read by the retrieval worker", style="dim")
+        else:
+            status.append("DONE" if self.succeeded else "STOPPED",
+                          style="bold green" if self.succeeded else "bold red")
+            status.append(f"  ·  {self.latest}", style="dim")
+
+        content: list[RenderableType] = [header, Text(""), status]
         if self.final_session or self.final_path:
             match = Text("MATCH  ", style="bold green")
             match.append(self.final_session or "Conversation located", style="bold white")
@@ -411,7 +452,8 @@ def run_recall(
     spawn = process_factory or subprocess.Popen
     environment = os.environ.copy()
     environment[_RECALL_ACTIVE_ENV] = "1"
-    progress = _RecallProgress(question)
+    # The AGY bridge answers in one payload; only Codex streams retrieval events.
+    progress = _RecallProgress(question, streams_progress=backend != "agy")
     interactive = _is_tty(stderr)
     console = Console(file=stderr, force_terminal=True) if interactive else None
     process: subprocess.Popen[str] | None = None

@@ -8,6 +8,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from rich.console import Console
+
 from agentconvos import recall
 
 
@@ -114,6 +116,25 @@ class RecallProgressTests(unittest.TestCase):
             }
         )
         self.assertEqual(progress.stage, 3)
+
+    def test_panel_hides_counters_a_backend_cannot_report(self):
+        """The AGY bridge returns one final payload rather than a stream, so a
+        cockpit of retrieval counters there would sit at zero for the whole run
+        and claim to be measuring something it never sees."""
+        console = Console(width=100, force_terminal=False)
+
+        streaming = recall._RecallProgress("Where was it?")
+        with console.capture() as captured:
+            console.print(streaming)
+        self.assertIn("SEARCHES", captured.get())
+
+        opaque = recall._RecallProgress("Where was it?", streams_progress=False)
+        with console.capture() as captured:
+            console.print(opaque)
+        panel = captured.get()
+        for label in ("SEARCHES", "CANDIDATES", "INSPECTED", "events"):
+            self.assertNotIn(label, panel)
+        self.assertIn("Where was it?", panel)
 
     def test_progress_tracks_real_searches_candidates_inspection_and_final_match(self):
         progress_type = getattr(recall, "_RecallProgress", None)

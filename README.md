@@ -73,11 +73,14 @@ the same retrieval workflow through the local AGY bridge, which uses its Gemini
 3.6 Flash high-thinking default; `--backend luna` keeps the existing Codex Luna
 path explicit.
 
-In an interactive terminal, recall renders a live cockpit with elapsed time,
-retrieval stage, real search attempts, candidate and unique-session counts,
-inspected conversations, archive coverage, worker activity, and the final matched
-session. Piped use stays plain: progress goes to stderr without terminal control
-codes, while stdout contains only the final evidence-backed answer.
+In an interactive terminal, recall renders a live panel with the elapsed time and
+the matched session. The Codex backend streams its retrieval events, so its panel
+also shows the current stage, real search attempts, candidate and unique-session
+counts, inspected conversations, and archive coverage. The AGY bridge answers in a
+single payload instead of a stream, so its panel reports only what it can actually
+observe rather than counters that would sit at zero. Piped use stays plain:
+progress goes to stderr without terminal control codes, while stdout contains only
+the final evidence-backed answer.
 
 ### Search
 

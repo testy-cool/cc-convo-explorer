@@ -56,7 +56,9 @@ shoot() {
 # through termshot stacks every redraw into one enormous image, so its final
 # screen is taken from tmux and rendered from that instead.
 shoot_frame() {
-  local name="$1" workdir="$2" cmd="$3"
+  # $4, when given, must appear in the captured frame. A run that failed still
+  # paints a screen, and an image of a stack trace is worse than no image.
+  local name="$1" workdir="$2" cmd="$3" expect="${4:-}"
   local raw="$DEMO/.frame.txt"
   rm -f "$REPO/assets/$name.png"
   tmux kill-session -t acshot 2>/dev/null || true
@@ -69,6 +71,10 @@ shoot_frame() {
     'until tmux capture-pane -t acshot -p 2>/dev/null | grep -q SHOT_DONE; do sleep 1; done'
   tmux capture-pane -e -p -t acshot | sed '/SHOT_DONE/,$d' > "$raw"
   tmux kill-session -t acshot 2>/dev/null || true
+  if [ -n "$expect" ] && ! grep -q "$expect" "$raw"; then
+    echo "error: $name run did not produce '$expect'; see $raw" >&2
+    exit 1
+  fi
   termshot --raw-read "$raw" --columns $COLS --filename "$REPO/assets/$name.png"
   assert_written "$REPO/assets/$name.png"
   echo "wrote assets/$name.png"
@@ -79,8 +85,10 @@ shoot demo-search "$DEMO/work/checkout-service" 'agentconvos --search rate'
 shoot demo-help   "$DEMO"                       'agentconvos --help'
 
 # recall spends a real model call, so it is only captured when the AGY bridge
-# is present. Headless runs cannot prompt for tool permission, so the demo home
-# gets a settings file that grants it.
+# is present. The bridge is used rather than the default Codex backend because
+# it authenticates locally: Codex looks for credentials under HOME, which here
+# is the throwaway demo archive. Headless runs cannot prompt for tool
+# permission either, so the demo home gets a settings file that grants it.
 AGY=/home/testycool/Work/try-rs/agy-bridge/agy-bridge
 if [ -x "$AGY" ] && [ "${SKIP_RECALL:-}" != "1" ]; then
   mkdir -p "$DEMO/.gemini/antigravity-cli"
@@ -91,7 +99,8 @@ if [ -x "$AGY" ] && [ "${SKIP_RECALL:-}" != "1" ]; then
 }
 JSON
   shoot_frame demo-recall "$DEMO/work/checkout-service" \
-    'agentconvos recall --backend agy "Where did we decide to use soft deletes, and why?"'
+    'agentconvos recall --backend agy "Where did we decide to use soft deletes, and why?"' \
+    "Sources"
 else
   echo "skipping assets/demo-recall.png (no AGY bridge, or SKIP_RECALL=1)"
 fi
