@@ -613,6 +613,41 @@ class TuiErgonomicsTests(unittest.IsolatedAsyncioTestCase):
             tui._index_finished(stats)
             tui._index_failed("boom")
 
+    async def test_projects_order_by_recent_activity_not_alphabet(self):
+        """With hundreds of projects, the active ones must sit on top; the
+        alphabet buries them under long-dormant names."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dormant_dir = root / "alpha-archive"
+            active_dir = root / "zeta-current"
+            dormant = Project(
+                "alpha-archive",
+                str(dormant_dir),
+                [_meta(dormant_dir / "old.jsonl", "old-session", "2026-01-05T09:00:00", dormant_dir)],
+            )
+            active = Project(
+                "zeta-current",
+                str(active_dir),
+                [_meta(active_dir / "new.jsonl", "new-session", "2026-08-10T09:00:00", active_dir)],
+            )
+
+            with patch("agentconvos.app.scan_projects", return_value=[active, dormant]):
+                tui = app_module.ConvoExplorer()
+                async with tui.run_test(size=(110, 36)) as pilot:
+                    for _ in range(60):
+                        await pilot.pause(0.05)
+                        labels = [
+                            str(node.label)
+                            for node in tui._walk_tree_nodes()
+                            if node.data and node.data.kind == "project"
+                        ]
+                        if len(labels) == 2:
+                            break
+
+        self.assertEqual(len(labels), 2, f"expected two project rows, got {labels}")
+        self.assertIn("zeta-current", labels[0])
+        self.assertIn("alpha-archive", labels[1])
+
     async def test_broad_filter_is_bounded_and_applied_in_one_batch(self):
         class BroadIndex:
             def search(self, query):

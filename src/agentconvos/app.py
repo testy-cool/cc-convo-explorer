@@ -915,12 +915,20 @@ History appears immediately. Full-text results arrive live while indexing runs i
                     expand=has_cwd or bool(terms),
                 )
 
-                def _proj_sort_key(item):
-                    _, p, cv = item
-                    is_cur = _is_current_project(cwd, _project_real_path(p, cv))
-                    return (not is_cur, item[0])
+                # Newest activity first, with the current directory's project
+                # pinned on top. Alphabetical order buries active projects.
+                ordered = sorted(
+                    items,
+                    key=lambda item: item[2][0].timestamp if item[2] else "",
+                    reverse=True,
+                )
+                ordered.sort(
+                    key=lambda item: not _is_current_project(
+                        cwd, _project_real_path(item[1], item[2])
+                    )
+                )
 
-                for rel_label, proj, convos in sorted(items, key=_proj_sort_key):
+                for rel_label, proj, convos in ordered:
                     project_path = _project_real_path(proj, convos)
                     is_cwd = _is_current_project(cwd, project_path)
                     date_str = _fmt_nav_ts(convos[0].timestamp) if convos else ""
