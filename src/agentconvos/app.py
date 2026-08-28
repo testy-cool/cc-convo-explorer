@@ -2248,6 +2248,16 @@ def main() -> None:
         help="Find phrases characteristic of one agent source",
     )
     parser.add_argument(
+        "--habits",
+        action="store_true",
+        help="Build a local HTML report of recurring reply phrases and writing patterns",
+    )
+    parser.add_argument(
+        "--output",
+        metavar="PATH",
+        help="Output HTML path for --habits (JSON is written beside it)",
+    )
+    parser.add_argument(
         "--limit",
         type=int,
         default=50,
@@ -2303,6 +2313,8 @@ def main() -> None:
 
     if args.ngrams and sys.argv.count("--source") != 1:
         parser.error("--ngrams requires exactly one --source")
+    if args.habits and sys.argv.count("--source") != 1:
+        parser.error("--habits requires exactly one --source")
 
     if args.source and args.convo and args.source != args.convo:
         print(f"Error: --source {args.source} conflicts with --convo {args.convo}")
@@ -2319,6 +2331,77 @@ def main() -> None:
     )
     if args.detail is None:
         args.detail = "results" if (args.deep or args.analyze) else "text"
+
+
+    if args.habits:
+        import json as _json
+
+        from .habits import (
+            analyze_habits,
+            session_replies_from_projects,
+            write_report,
+        )
+        from .ngrams import assistant_replies_from_index
+        from .scanner import scan_projects
+
+        complete_projects = scan_projects(extra_dirs=_extra_dirs)
+        projects = scan_projects(
+            extra_dirs=_extra_dirs,
+            source=args.source,
+            after=args.after,
+            before=args.before,
+        )
+        all_conversations = [
+            conversation
+            for project in complete_projects
+            for conversation in project.conversations
+        ]
+        search_index = ConversationSearchIndex()
+        search_index.sync(all_conversations)
+        selected_conversations = [
+            conversation
+            for project in projects
+            for conversation in project.conversations
+        ]
+        indexed_replies = assistant_replies_from_index(
+            search_index.path,
+            selected_conversations,
+        )
+        replies = session_replies_from_projects(
+            projects,
+            source=args.source,
+            indexed_replies=indexed_replies,
+        )
+        report = analyze_habits(
+            replies,
+            source=args.source,
+            discovered_limit=max(1, args.limit),
+        )
+        output = (
+            Path(args.output)
+            if args.output
+            else Path.home()
+            / ".claude"
+            / "convo-explorer"
+            / "reports"
+            / f"{args.source}-language-patterns.html"
+        )
+        write_report(report, output)
+        if args.json:
+            print(
+                _json.dumps(
+                    {
+                        "html": str(output),
+                        "json": str(output.with_suffix(".json")),
+                        "report": report.public_dict(),
+                    },
+                    indent=2,
+                )
+            )
+        else:
+            print(f"Wrote language-pattern report: {output}")
+            print(f"Wrote report data: {output.with_suffix('.json')}")
+        return
 
 
     if args.ngrams:

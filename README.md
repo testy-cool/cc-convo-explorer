@@ -115,6 +115,27 @@ in one conversation. Results are descriptive corpus statistics, not proof of
 training or an agent's underlying style. `--after` and `--before` restrict both
 the selected source and the comparison baseline.
 
+### Reply-language habit report
+
+```bash
+agentconvos --habits --source claude
+agentconvos --habits --source claude --output /tmp/claude-habits.html
+```
+
+This builds a local HTML report of candidate writing patterns without comparing
+the selected agent with another agent. It combines recurring reply phrases with
+reproducible structural detectors such as honesty framing, decision handoffs,
+staged disclosure, and answer markers that first appear after a long preamble.
+Every table row shows three examples from different conversations when the archive
+contains enough evidence, and expands to the remaining examples in batches of 50.
+
+The report analyzes assistant reply text only and stays on the local machine. Its
+labels describe textual evidence; recurrence does not prove intent, authorship,
+training data, or an agent's inherent personality. Synthetic phrases such as
+"the load-bearing boundary," "the honest answer," and "both are yours to decide"
+demonstrate the report shape without publishing a real conversation. Generated
+HTML and JSON are local artifacts and are not included in this repository.
+
 ### Fast interactive find
 
 ```bash

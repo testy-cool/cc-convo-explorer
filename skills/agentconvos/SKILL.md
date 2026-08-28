@@ -78,6 +78,17 @@ shape of something.
 The index tracks new sessions, so work from an hour ago is findable. Only the
 very first search on a new machine is slow, while the index is built once.
 
+## Inspecting reply-language patterns locally
+
+```bash
+agentconvos --habits --source claude
+```
+
+This creates a local HTML and JSON report with recurring reply phrases,
+reproducible writing structures, and three short examples per row. It does not
+call a model or upload conversation text. Treat its labels as candidate textual
+evidence, not proof of intent, training data, or an agent's inherent personality.
+
 ## Asking a question the archive has to answer
 
 ```bash
