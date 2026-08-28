@@ -2243,6 +2243,11 @@ def main() -> None:
         help="Search conversation text using AND terms and quoted phrases",
     )
     parser.add_argument(
+        "--ngrams",
+        action="store_true",
+        help="Find phrases characteristic of one agent source",
+    )
+    parser.add_argument(
         "--limit",
         type=int,
         default=50,
@@ -2296,6 +2301,9 @@ def main() -> None:
                         help="Quick project digest: last 5 sessions per agent with catch-up details")
     args, remaining = parser.parse_known_args()
 
+    if args.ngrams and sys.argv.count("--source") != 1:
+        parser.error("--ngrams requires exactly one --source")
+
     if args.source and args.convo and args.source != args.convo:
         print(f"Error: --source {args.source} conflicts with --convo {args.convo}")
         return
@@ -2311,6 +2319,61 @@ def main() -> None:
     )
     if args.detail is None:
         args.detail = "results" if (args.deep or args.analyze) else "text"
+
+
+    if args.ngrams:
+        import json as _json
+
+        from .ngrams import analyze_projects, assistant_replies_from_index
+        from .scanner import scan_projects
+
+        complete_projects = scan_projects(extra_dirs=_extra_dirs)
+        if args.after or args.before:
+            projects = scan_projects(
+                extra_dirs=_extra_dirs,
+                after=args.after,
+                before=args.before,
+            )
+        else:
+            projects = complete_projects
+        all_conversations = [
+            conversation
+            for project in complete_projects
+            for conversation in project.conversations
+        ]
+        search_index = ConversationSearchIndex()
+        search_index.sync(all_conversations)
+        selected_conversations = [
+            conversation
+            for project in projects
+            for conversation in project.conversations
+        ]
+        indexed_replies = assistant_replies_from_index(
+            search_index.path,
+            selected_conversations,
+        )
+        analysis = analyze_projects(
+            projects,
+            args.source,
+            limit=max(1, args.limit),
+            indexed_replies=indexed_replies,
+        )
+        if args.json:
+            print(_json.dumps(analysis.public_dict(), indent=2))
+        else:
+            print(
+                f"Characteristic reply phrases for {args.source} "
+                f"({analysis.target_sessions} sessions; compared with "
+                f"{analysis.baseline_sessions} sessions from all other indexed sources)\n"
+            )
+            print(f"{'Phrase':<36} {'Occurrences':>11} {'Sessions':>9}  Distinctiveness")
+            print(f"{'-' * 36} {'-' * 11} {'-' * 9}  {'-' * 34}")
+            for row in analysis.phrases:
+                print(
+                    f"{row.phrase[:36]:<36} {row.occurrences:>11} {row.sessions:>9}  "
+                    f"{row.distinctiveness_label}"
+                )
+        return
 
 
     if args.turns:

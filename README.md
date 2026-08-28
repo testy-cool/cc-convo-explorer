@@ -101,6 +101,20 @@ original role and turn number without reparsing every transcript. Existing index
 receive a one-time turn backfill on the first search; a large archive can take several
 minutes once, after which only new or changed conversations are reindexed.
 
+### Characteristic reply phrases
+
+```bash
+agentconvos --ngrams --source claude
+agentconvos --ngrams --source claude --limit 20 --json
+```
+
+This compares one source's assistant reply text only with assistant replies from
+all other indexed agent sources. It ranks one-to-three-word phrases by smoothed
+session prevalence, so recurring source-specific language outranks raw repetition
+in one conversation. Results are descriptive corpus statistics, not proof of
+training or an agent's underlying style. `--after` and `--before` restrict both
+the selected source and the comparison baseline.
+
 ### Fast interactive find
 
 ```bash
@@ -194,7 +208,7 @@ agentconvos --analyze <id> --prompt "What tools were used most?"
 
 ### JSON output
 
-`--json` works with `--list`, `--search`, `--last`, `--context`, and `--turns`.
+`--json` works with `--list`, `--search`, `--ngrams`, `--last`, `--context`, and `--turns`.
 Transcript output includes normalized indexed turns plus source, path, UUID, cwd,
 size, and modification metadata.
 
